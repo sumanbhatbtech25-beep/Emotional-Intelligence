@@ -55,3 +55,23 @@ This is a deliberately simple prototype. The camera feature is a basic smile-lik
 
 ## Suggested project title
 **NEUROENDO: A Non-Quantum Multimodal Hebbian Learning Model with an Artificial Endocrine System**
+
+## App access protection
+
+The app now includes an optional shared-password sign-in gate. Configure it before using the app:
+
+### Streamlit Community Cloud
+1. Open your app in Streamlit Community Cloud.
+2. Open **Settings → Secrets**.
+3. Add a strong, unique password:
+
+```toml
+APP_PASSWORD = "replace-with-a-long-unique-password"
+```
+
+4. Save the secrets and restart/redeploy the app if needed.
+
+### Local development
+Create `.streamlit/secrets.toml` in the project directory with the same `APP_PASSWORD` entry, then run `streamlit run app.py`. Do not commit `.streamlit/secrets.toml` to GitHub.
+
+If `APP_PASSWORD` is not configured, the app remains locked and displays setup instructions. The sign-in is a **shared-password gate**, not individual accounts, OAuth, or role-based authorization. Anyone who knows the shared password can sign in. Use platform-level access restrictions for sensitive/private deployments, and do not treat this alone as a full identity system.
