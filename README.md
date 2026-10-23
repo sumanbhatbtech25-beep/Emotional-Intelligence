@@ -75,3 +75,12 @@ APP_PASSWORD = "replace-with-a-long-unique-password"
 Create `.streamlit/secrets.toml` in the project directory with the same `APP_PASSWORD` entry, then run `streamlit run app.py`. Do not commit `.streamlit/secrets.toml` to GitHub.
 
 If `APP_PASSWORD` is not configured, the app remains locked and displays setup instructions. The sign-in is a **shared-password gate**, not individual accounts, OAuth, or role-based authorization. Anyone who knows the shared password can sign in. Use platform-level access restrictions for sensitive/private deployments, and do not treat this alone as a full identity system.
+
+## Upgraded learning dashboard
+
+The app includes:
+- A live architecture overview showing the path from captured/demo signals through feature extraction, Hebbian associations, endocrine modulation, and response generation.
+- Visible reward-like and stress-like controller states, the learning modulation factor, weight matrix, interaction history, and state graphs.
+- A reproducible A/B experiment comparing ordinary Hebbian learning against endocrine-modulated Hebbian learning on the same synthetic dataset, using the same training/test split and base learning rate. The synthetic target rule is illustrative; results are not evidence of reliable emotion recognition or guaranteed performance improvement.
+
+Use **Run A/B comparison** in the experiment section to run the comparison. A fixed random seed makes results repeatable for a given sample count.
