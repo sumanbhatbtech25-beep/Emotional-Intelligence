@@ -85,14 +85,15 @@ The app includes:
 
 Use **Run A/B comparison** in the experiment section to run the comparison. A fixed random seed makes results repeatable for a given sample count.
 
-## Improved emotion cues (text + facial expression)
+## Improved emotion cues (speech + facial expression)
 
-The app now provides a separate **Emotion estimate** panel:
-- **Text context:** use the “Describe what happened” box and click **Analyze my words**. The app attempts to load a pretrained English emotion classifier (`j-hartmann/emotion-english-distilroberta-base`). If the model cannot load, it falls back to explainable keyword/phrase cues.
-- **Facial expression:** in Camera + microphone mode, the app attempts a pretrained expression classifier (`trpakov/vit-face-expression`) to estimate visible sadness, anger, fear, joy, surprise, and neutral expression.
-- **Fusion:** when text and face outputs are available, text contributes 65% and facial expression 35%; audio energy is only a very weak arousal cue because loudness cannot identify a specific emotion.
-- **Uncertainty:** model outputs are estimates, not calibrated probabilities or a diagnosis. Visible expressions do not prove what someone feels.
+The app provides a separate **Emotion estimate** panel:
+- **Speech-to-text:** in Camera + microphone mode, the recorded audio clip is transcribed automatically using the pretrained `openai/whisper-tiny.en` model. No manual text entry is required.
+- **Spoken-word emotion:** the transcript is analyzed using `j-hartmann/emotion-english-distilroberta-base`; if that model is unavailable, the app falls back to explainable keyword/phrase cues.
+- **Facial expression:** the app attempts `trpakov/vit-face-expression` to estimate visible sadness, anger, fear, joy, surprise, and neutral expression.
+- **Fusion:** available transcript and facial outputs are combined; audio energy is only a weak arousal cue because loudness cannot identify a specific emotion.
+- **Uncertainty:** model outputs are estimates, not calibrated probabilities or a diagnosis. Visible expressions and spoken words do not prove what someone feels.
 
-The first pretrained-model use may take time and requires network access and enough memory to download/load PyTorch and model weights. If the facial model fails to load on Community Cloud, text analysis remains available. For the example “I got scolded because I was late to a meeting, and I feel embarrassed and sad,” the text input is designed to give sadness-related language more direct weight than a smile-only image cue.
+First use requires network access and enough memory to download/load PyTorch and model weights. Streamlit's built-in camera and microphone controls capture a still image and an audio clip; they do **not** provide continuous always-on webcam/microphone streaming. If speech recognition fails, the app displays an error note and skips emotion-from-words rather than pretending to have understood the audio.
 
-This is a pretrained-model integration plus a fallback, not a newly fine-tuned model trained on your own labeled dataset. Reliable improvement would require evaluating representative labeled examples and tuning against those results.
+This is pretrained-model integration plus a fallback, not a newly fine-tuned model trained on your own labeled dataset. Reliable improvement requires evaluating representative labeled examples and tuning against those results.
