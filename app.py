@@ -72,6 +72,8 @@ def init_state():
         st.session_state.last_pred = None
     if "last_notes" not in st.session_state:
         st.session_state.last_notes = []
+    if "ab_results" not in st.session_state:
+        st.session_state.ab_results = None
 
 def clip(x, lo=0.0, hi=1.0):
     return float(max(lo, min(hi, x)))
@@ -79,6 +81,57 @@ def clip(x, lo=0.0, hi=1.0):
 def endocrine_modulation(reward, stress):
     # Proposed engineering rule, not a biological law.
     return clip(1.0 + reward - stress, 0.2, 1.5)
+
+def run_ab_experiment(seed=42, samples=120):
+    """Compare ordinary and endocrine-modulated Hebbian updates on identical data."""
+    rng = np.random.default_rng(seed)
+    X = rng.uniform(0.0, 1.0, size=(samples, 3))
+    # Deterministic teaching rule provides repeatable labels for this demonstration.
+    target_scores = np.column_stack([
+        0.65 * X[:, 2] + 0.20 * X[:, 1],
+        0.45 * (1.0 - X[:, 2]) + 0.20 * (1.0 - X[:, 0]),
+        0.60 * X[:, 0] + 0.25 * X[:, 1]
+    ])
+    y_idx = np.argmax(target_scores, axis=1)
+    split = int(samples * 0.7)
+    X_train, X_test = X[:split], X[split:]
+    y_train, y_test = y_idx[:split], y_idx[split:]
+
+    W_plain = np.zeros((3, 3), dtype=float)
+    W_endo = np.zeros((3, 3), dtype=float)
+    d_state, s_state = 0.20, 0.15
+    eta = 0.10
+
+    for x_i, target_i in zip(X_train, y_train):
+        y = np.zeros(3, dtype=float)
+        y[target_i] = 1.0
+        # A: ordinary Hebbian learning, no endocrine modulation.
+        W_plain = np.clip(W_plain + eta * np.outer(x_i, y), -2.0, 2.0)
+        # B: same sample and target, with the simulated endocrine factor.
+        factor = endocrine_modulation(d_state, s_state)
+        W_endo = np.clip(W_endo + eta * factor * np.outer(x_i, y), -2.0, 2.0)
+        d_state, s_state = update_endocrine(d_state, s_state, 0.8, 0.2)
+
+    def evaluate(W):
+        scores = X_test @ W
+        pred = np.argmax(scores, axis=1)
+        return float(np.mean(pred == y_test)), pred
+
+    acc_plain, pred_plain = evaluate(W_plain)
+    acc_endo, pred_endo = evaluate(W_endo)
+    return {
+        "samples": samples,
+        "train_samples": len(X_train),
+        "test_samples": len(X_test),
+        "plain_accuracy": acc_plain,
+        "endo_accuracy": acc_endo,
+        "plain_weights": W_plain,
+        "endo_weights": W_endo,
+        "plain_predictions": pred_plain,
+        "endo_predictions": pred_endo,
+        "test_targets": y_test,
+    }
+
 
 def visual_features(image_bytes):
     """Extract a coarse visual cue using OpenCV Haar cascades.
@@ -228,6 +281,29 @@ else:
     current = None
 
 st.divider()
+with st.expander("System architecture", expanded=False):
+    st.markdown("""
+    ```text
+    Camera / microphone or demo signals
+                   |
+                   v
+       Classical feature extraction
+                   |
+                   v
+        Feature vector x = [V, A, U]
+                   |
+                   v
+       Hebbian association network <---- Feedback target y
+                   ^                         |
+                   |                         v
+       Endocrine modulation g(H) <---- Reward D / Stress S
+                   |
+                   v
+          Response + live dashboard
+    ```
+    """)
+    st.caption("All processing is classical and non-quantum. D and S are simulated controller states, not measured hormones.")
+
 st.subheader("Learning and response")
 
 if current is None:
@@ -332,4 +408,52 @@ S_{t+1}=0.9S_t+0.1Q_t
 
 These are intentionally simple engineering choices for a prototype. The camera feature is a basic smile-like cue and the audio feature is a rough acoustic-arousal proxy. Neither can reliably determine a person's internal emotional state. The model demonstrates learning dynamics and feedback, not clinical or definitive emotion detection.
 """)
+
+st.divider()
+st.subheader("A/B experiment: ordinary vs endocrine-modulated Hebbian learning")
+st.write(
+    "Both variants receive the same reproducible synthetic inputs, labels, training/test split, "
+    "and base learning rate. Variant A uses ordinary Hebbian updates; Variant B multiplies each "
+    "update by the simulated endocrine factor. This is a controlled demonstration, not evidence "
+    "of real-world emotional understanding."
+)
+ab_col1, ab_col2 = st.columns([1, 2])
+with ab_col1:
+    ab_samples = st.select_slider(
+        "Synthetic examples", options=[60, 120, 240, 480], value=120, key="ab_samples"
+    )
+    if st.button("Run A/B comparison", type="primary"):
+        st.session_state.ab_results = run_ab_experiment(samples=int(ab_samples))
+with ab_col2:
+    st.caption("The experiment uses fixed seed 42 so results are repeatable for the same sample count.")
+
+if st.session_state.ab_results is not None:
+    ab = st.session_state.ab_results
+    a1, a2, a3 = st.columns(3)
+    a1.metric("Ordinary Hebbian accuracy", f"{ab['plain_accuracy']:.1%}")
+    a2.metric("Endocrine-modulated accuracy", f"{ab['endo_accuracy']:.1%}")
+    a3.metric("Difference (B − A)", f"{(ab['endo_accuracy'] - ab['plain_accuracy']):+.1%}")
+    comp_df = pd.DataFrame({
+        "Variant": ["A · Ordinary Hebbian", "B · Endocrine-modulated"],
+        "Test accuracy": [ab["plain_accuracy"], ab["endo_accuracy"]]
+    }).set_index("Variant")
+    st.bar_chart(comp_df)
+    st.write(
+        f"Training examples: {ab['train_samples']} · Test examples: {ab['test_samples']} · "
+        "Same generated dataset and labels for both variants."
+    )
+    st.dataframe(pd.DataFrame({
+        "Variant": ["A · Ordinary Hebbian", "B · Endocrine-modulated"],
+        "Final test accuracy": [ab["plain_accuracy"], ab["endo_accuracy"]],
+        "Weight matrix norm": [
+            float(np.linalg.norm(ab["plain_weights"])),
+            float(np.linalg.norm(ab["endo_weights"]))
+        ]
+    }), use_container_width=True)
+    st.caption(
+        "Interpret cautiously: the synthetic labels follow a hand-designed rule, and endocrine "
+        "modulation changes update magnitude rather than adding new information. The comparison "
+        "is illustrative and does not guarantee that Variant B performs better."
+    )
+
 st.caption("Privacy note: this prototype processes captured media in the app session. Avoid recording other people without their informed consent.")
