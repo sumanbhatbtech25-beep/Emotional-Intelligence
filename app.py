@@ -137,6 +137,141 @@ def run_ab_experiment(seed=42, samples=120):
     }
 
 
+EMOTION_LABELS = ["sadness", "anger", "fear", "joy", "surprise", "neutral"]
+
+TEXT_CUES = {
+    "sadness": {
+        "words": ["sad", "upset", "hurt", "cry", "crying", "lonely", "disappointed",
+                  "embarrassed", "ashamed", "guilty", "miserable", "heartbroken",
+                  "depressed", "down", "unhappy", "scolded", "rejected", "ignored"],
+        "phrases": ["got scolded", "was scolded", "got yelled at", "i feel bad",
+                    "feel terrible", "made me cry", "i got in trouble", "feel awful"]
+    },
+    "anger": {
+        "words": ["angry", "mad", "furious", "annoyed", "irritated", "rage", "unfair",
+                  "hate", "frustrated", "blamed"],
+        "phrases": ["so unfair", "lost my temper", "can't stand", "got blamed"]
+    },
+    "fear": {
+        "words": ["scared", "afraid", "anxious", "anxiety", "worried", "nervous",
+                  "panic", "panicking", "overwhelmed", "stress", "stressed", "terrified"],
+        "phrases": ["what if", "i am worried", "i'm worried", "under pressure"]
+    },
+    "joy": {
+        "words": ["happy", "great", "excited", "joyful", "proud", "relieved", "love",
+                  "wonderful", "amazing", "glad", "delighted", "hopeful"],
+        "phrases": ["so happy", "can't wait", "that went well", "feeling good"]
+    },
+    "surprise": {
+        "words": ["surprised", "shocked", "unexpected", "astonished", "unbelievable"],
+        "phrases": ["didn't expect", "out of nowhere", "i can't believe"]
+    }
+}
+
+def classify_text_fallback(text):
+    """Explainable keyword fallback; not a trained model."""
+    cleaned = re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower())
+    scores = {label: 0.0 for label in EMOTION_LABELS}
+    evidence = {label: [] for label in EMOTION_LABELS}
+    tokens = set(cleaned.split())
+    for emotion, cues in TEXT_CUES.items():
+        for phrase in cues["phrases"]:
+            if phrase in cleaned:
+                scores[emotion] += 2.0
+                evidence[emotion].append(phrase)
+        for word in cues["words"]:
+            if word in tokens:
+                scores[emotion] += 1.0
+                evidence[emotion].append(word)
+    if not any(scores.values()):
+        scores["neutral"] = 1.0
+        return scores, ["No strong emotion keywords found; treat this result as uncertain."]
+    total = sum(scores.values())
+    scores = {k: v / total for k, v in scores.items()}
+    notes = [f"Text cues for {label}: {', '.join(evidence[label][:5])}."
+             for label in EMOTION_LABELS if evidence[label]]
+    return scores, notes
+
+def infer_text_emotion(text):
+    """Use a pretrained text model when available; fall back to transparent keyword cues."""
+    if not text or not text.strip():
+        return None, ["No text description provided."]
+    try:
+        from transformers import pipeline
+        if "text_emotion_pipeline" not in st.session_state:
+            with st.spinner("Loading the text emotion model for first use..."):
+                st.session_state.text_emotion_pipeline = pipeline(
+                    "text-classification",
+                    model="j-hartmann/emotion-english-distilroberta-base",
+                    top_k=None
+                )
+        output = st.session_state.text_emotion_pipeline(text[:2000])[0]
+        scores = {label: 0.0 for label in EMOTION_LABELS}
+        for item in output:
+            label = str(item["label"]).lower()
+            mapped = {"joy":"joy", "sadness":"sadness", "anger":"anger",
+                      "fear":"fear", "surprise":"surprise", "neutral":"neutral",
+                      "disgust":"anger"}.get(label)
+            if mapped:
+                scores[mapped] = max(scores[mapped], float(item["score"]))
+        total = sum(scores.values()) or 1.0
+        return {k: v / total for k, v in scores.items()}, [
+            "Text analyzed with a pretrained English emotion classifier."
+        ]
+    except Exception as exc:
+        scores, notes = classify_text_fallback(text)
+        notes.append(f"Pretrained text model unavailable ({type(exc).__name__}); keyword fallback used.")
+        return scores, notes
+
+def infer_facial_emotion(image_bytes):
+    """Run a pretrained facial-expression model, or clearly mark it unavailable."""
+    try:
+        from PIL import Image
+        from transformers import pipeline
+        if "face_emotion_pipeline" not in st.session_state:
+            with st.spinner("Loading the facial-expression model for first use..."):
+                st.session_state.face_emotion_pipeline = pipeline(
+                    "image-classification", model="trpakov/vit-face-expression"
+                )
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        output = st.session_state.face_emotion_pipeline(image)
+        scores = {label: 0.0 for label in EMOTION_LABELS}
+        for item in output:
+            label = str(item["label"]).lower()
+            mapped = {"happy":"joy", "happiness":"joy", "sad":"sadness",
+                      "sadness":"sadness", "angry":"anger", "anger":"anger",
+                      "fear":"fear", "fearful":"fear", "surprise":"surprise",
+                      "surprised":"surprise", "neutral":"neutral",
+                      "disgust":"anger"}.get(label)
+            if mapped:
+                scores[mapped] = max(scores[mapped], float(item["score"]))
+        total = sum(scores.values()) or 1.0
+        return {k: v / total for k, v in scores.items()}, [
+            "Facial-expression model estimates visible expression, not internal emotion with certainty."
+        ]
+    except Exception as exc:
+        return None, [
+            "Facial-expression model unavailable; the basic smile detector cannot reliably detect sadness.",
+            f"Model error: {type(exc).__name__}. Text analysis is still available."
+        ]
+
+def combine_emotion_scores(text_scores=None, face_scores=None, audio_arousal=None):
+    combined = {label: 0.0 for label in EMOTION_LABELS}
+    if text_scores:
+        for label, score in text_scores.items():
+            combined[label] += 0.65 * float(score)
+    if face_scores:
+        for label, score in face_scores.items():
+            combined[label] += 0.35 * float(score)
+    if audio_arousal is not None:
+        # Audio energy is only a weak arousal cue; it cannot identify emotion by itself.
+        combined["fear"] += 0.025 * float(audio_arousal)
+        combined["anger"] += 0.025 * float(audio_arousal)
+    total = sum(combined.values())
+    if total <= 0:
+        return {"sadness": 0, "anger": 0, "fear": 0, "joy": 0, "surprise": 0, "neutral": 1}
+    return {k: v / total for k, v in combined.items()}
+
 def visual_features(image_bytes):
     """Extract a coarse visual cue using OpenCV Haar cascades.
     This is NOT reliable emotion recognition; it only estimates a smile-like visual cue."""
