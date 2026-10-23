@@ -74,6 +74,10 @@ def init_state():
         st.session_state.last_notes = []
     if "ab_results" not in st.session_state:
         st.session_state.ab_results = None
+    if "emotion_scores" not in st.session_state:
+        st.session_state.emotion_scores = None
+    if "emotion_notes" not in st.session_state:
+        st.session_state.emotion_notes = []
 
 def clip(x, lo=0.0, hi=1.0):
     return float(max(lo, min(hi, x)))
@@ -238,6 +242,20 @@ with st.sidebar:
 
 mode = st.radio("Input mode", ["Demo / simulated signals", "Camera + microphone"], horizontal=True)
 
+st.markdown("### Describe what happened (recommended)")
+st.caption("Words often provide more context than a facial expression. The model estimates emotion from text and, when available, a facial-expression model.")
+emotion_text = st.text_area(
+    "What happened, or what are you feeling?",
+    placeholder="Example: I got scolded because I was late to a meeting, and I feel embarrassed and sad.",
+    height=90,
+    key="emotion_text_input"
+)
+if st.button("Analyze my words", key="analyze_words"):
+    text_scores, text_notes = infer_text_emotion(emotion_text)
+    st.session_state.emotion_scores = combine_emotion_scores(text_scores=text_scores)
+    st.session_state.emotion_notes = text_notes
+    st.session_state.emotion_source = "text"
+
 col1, col2 = st.columns(2)
 visual_cue = None
 audio_cue = None
@@ -262,7 +280,14 @@ else:
             st.warning("Capture both an image and an audio clip first.")
         else:
             visual_cue, visual_uncertainty, vnotes = visual_features(img_file.getvalue())
+            face_scores, face_notes = infer_facial_emotion(img_file.getvalue())
+            text_scores, text_notes = infer_text_emotion(emotion_text) if emotion_text.strip() else (None, [])
             audio_cue, anot = audio_features(audio_file.getvalue())
+            st.session_state.emotion_scores = combine_emotion_scores(
+                text_scores=text_scores, face_scores=face_scores, audio_arousal=audio_cue
+            )
+            st.session_state.emotion_notes = text_notes + face_notes + anot
+            st.session_state.emotion_source = "text + face + acoustic proxy"
             st.session_state.last_features = {
                 "visual": visual_cue, "audio": audio_cue, "uncertainty": visual_uncertainty
             }
@@ -325,6 +350,21 @@ else:
     a.metric("Visual positive cue", f'{current["visual"]:.2f}')
     b.metric("Audio arousal cue", f'{current["audio"]:.2f}')
     c.metric("Uncertainty cue", f'{current["uncertainty"]:.2f}')
+
+    if st.session_state.emotion_scores:
+        emotion_scores = st.session_state.emotion_scores
+        best_emotion = max(emotion_scores, key=emotion_scores.get)
+        best_score = emotion_scores[best_emotion]
+        st.markdown("#### Emotion estimate (separate from the response network)")
+        st.metric("Most likely cue", best_emotion.title(), f"{best_score:.0%} relative score")
+        emotion_df = pd.DataFrame({
+            "Emotion": list(emotion_scores.keys()),
+            "Score": list(emotion_scores.values())
+        }).set_index("Emotion")
+        st.bar_chart(emotion_df)
+        for note in st.session_state.emotion_notes:
+            st.write(f"- {note}")
+        st.caption("Scores are model/heuristic outputs, not calibrated probabilities or a diagnosis. Check whether the estimate matches how you actually feel.")
 
     st.write("**Extracted feature notes**")
     for note in st.session_state.last_notes:
