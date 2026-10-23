@@ -7,6 +7,50 @@ import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="NEUROENDO", page_icon="🧠", layout="wide")
 
+# Optional shared-password gate. Configure APP_PASSWORD in Streamlit secrets.
+# This is a simple access gate, not individual user accounts or OAuth.
+import hmac
+
+def require_app_password():
+    try:
+        configured_password = st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        configured_password = ""
+
+    if not configured_password:
+        st.error("App access is not configured yet.")
+        st.info(
+            "For Streamlit Community Cloud, open your app's Settings → Secrets "
+            "and add APP_PASSWORD = \"a-long-unique-password\". "
+            "For local use, add the same entry to .streamlit/secrets.toml. "
+            "Do not commit secrets.toml or put the password in source code."
+        )
+        st.stop()
+
+    if st.session_state.get("authenticated", False):
+        with st.sidebar:
+            if st.button("Log out"):
+                st.session_state["authenticated"] = False
+                st.rerun()
+        return
+
+    st.title("🧠 NEUROENDO — Sign in")
+    st.caption("Enter the shared app password to continue.")
+    with st.form("app_login_form", clear_on_submit=True):
+        password = st.text_input("App password", type="password")
+        submitted = st.form_submit_button("Sign in", type="primary")
+
+    if submitted:
+        if hmac.compare_digest(str(password), str(configured_password)):
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop()
+
+require_app_password()
+
+
 RESPONSES = ["Supportive", "Neutral", "Upbeat"]
 FEATURES = ["Visual positive cue", "Audio arousal cue", "Uncertainty cue"]
 
