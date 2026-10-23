@@ -1,5 +1,6 @@
 import io
 import math
+import re
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -78,6 +79,8 @@ def init_state():
         st.session_state.emotion_scores = None
     if "emotion_notes" not in st.session_state:
         st.session_state.emotion_notes = []
+    if "transcript" not in st.session_state:
+        st.session_state.transcript = ""
 
 def clip(x, lo=0.0, hi=1.0):
     return float(max(lo, min(hi, x)))
@@ -191,6 +194,47 @@ def classify_text_fallback(text):
     notes = [f"Text cues for {label}: {', '.join(evidence[label][:5])}."
              for label in EMOTION_LABELS if evidence[label]]
     return scores, notes
+
+def transcribe_audio(audio_bytes):
+    """Transcribe a recorded WAV clip using a pretrained speech-recognition model."""
+    try:
+        from scipy.io import wavfile
+        from transformers import pipeline
+
+        if "speech_recognition_pipeline" not in st.session_state:
+            with st.spinner("Loading speech-to-text model for first use..."):
+                st.session_state.speech_recognition_pipeline = pipeline(
+                    "automatic-speech-recognition",
+                    model="openai/whisper-tiny.en"
+                )
+
+        sr, data = wavfile.read(io.BytesIO(audio_bytes))
+        if data.size == 0:
+            return "", ["The recorded audio was empty."]
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        if np.issubdtype(data.dtype, np.integer):
+            info = np.iinfo(data.dtype)
+            scale = float(max(abs(info.min), abs(info.max)))
+            data = data.astype(np.float32) / scale
+        else:
+            data = data.astype(np.float32)
+            peak = float(np.max(np.abs(data))) if data.size else 0.0
+            if peak > 1.0:
+                data = data / peak
+
+        result = st.session_state.speech_recognition_pipeline(
+            {"raw": data, "sampling_rate": int(sr)}, chunk_length_s=20
+        )
+        transcript = str(result.get("text", "")).strip()
+        if transcript:
+            return transcript, ["Speech was transcribed automatically with Whisper Tiny English."]
+        return "", ["Speech-to-text returned an empty transcript; emotion-from-words was skipped."]
+    except Exception as exc:
+        return "", [
+            "Automatic speech transcription is unavailable, so spoken-word emotion analysis was skipped.",
+            f"Speech-to-text error: {type(exc).__name__}. Check model download, memory, and audio format."
+        ]
 
 def infer_text_emotion(text):
     """Use a pretrained text model when available; fall back to transparent keyword cues."""
@@ -377,19 +421,7 @@ with st.sidebar:
 
 mode = st.radio("Input mode", ["Demo / simulated signals", "Camera + microphone"], horizontal=True)
 
-st.markdown("### Describe what happened (recommended)")
-st.caption("Words often provide more context than a facial expression. The model estimates emotion from text and, when available, a facial-expression model.")
-emotion_text = st.text_area(
-    "What happened, or what are you feeling?",
-    placeholder="Example: I got scolded because I was late to a meeting, and I feel embarrassed and sad.",
-    height=90,
-    key="emotion_text_input"
-)
-if st.button("Analyze my words", key="analyze_words"):
-    text_scores, text_notes = infer_text_emotion(emotion_text)
-    st.session_state.emotion_scores = combine_emotion_scores(text_scores=text_scores)
-    st.session_state.emotion_notes = text_notes
-    st.session_state.emotion_source = "text"
+st.caption("In Camera + microphone mode, recorded speech is transcribed automatically and the transcript is analyzed for emotional language. No typing is required.")
 
 col1, col2 = st.columns(2)
 visual_cue = None
@@ -405,7 +437,7 @@ if mode == "Demo / simulated signals":
     visual_uncertainty = st.slider("Visual uncertainty (simulated)", 0.0, 1.0, 0.2, 0.1)
     notes = ["Demo inputs are simulated so the algorithm can be demonstrated consistently."]
 else:
-    st.info("Capture a still image and a short audio clip. Your browser may ask for camera/microphone permission. For a live continuous stream, a separate browser frontend is usually needed.")
+    st.info("Capture a still image and record a short audio clip. The app transcribes the recording automatically, then analyzes the words alongside facial-expression cues. Streamlit built-in controls record clips rather than providing continuous always-on listening.")
     with col1:
         img_file = st.camera_input("Capture visual input")
     with col2:
@@ -416,18 +448,24 @@ else:
         else:
             visual_cue, visual_uncertainty, vnotes = visual_features(img_file.getvalue())
             face_scores, face_notes = infer_facial_emotion(img_file.getvalue())
-            text_scores, text_notes = infer_text_emotion(emotion_text) if emotion_text.strip() else (None, [])
-            audio_cue, anot = audio_features(audio_file.getvalue())
+            audio_bytes = audio_file.getvalue()
+            audio_cue, anot = audio_features(audio_bytes)
+            transcript, speech_notes = transcribe_audio(audio_bytes)
+            st.session_state.transcript = transcript
+            text_scores, text_notes = infer_text_emotion(transcript) if transcript else (None, [])
             st.session_state.emotion_scores = combine_emotion_scores(
                 text_scores=text_scores, face_scores=face_scores, audio_arousal=audio_cue
             )
-            st.session_state.emotion_notes = text_notes + face_notes + anot
-            st.session_state.emotion_source = "text + face + acoustic proxy"
+            st.session_state.emotion_notes = speech_notes + text_notes + face_notes + anot
+            st.session_state.emotion_source = "spoken words + face + acoustic proxy"
             st.session_state.last_features = {
                 "visual": visual_cue, "audio": audio_cue, "uncertainty": visual_uncertainty
             }
             st.session_state.last_notes = vnotes + anot
-            st.success("Features extracted. Scroll down to run the learning model.")
+            if transcript:
+                st.success("Audio transcribed and features extracted. Review the transcript and emotion estimate below.")
+            else:
+                st.warning("Features extracted, but no transcript was available. Emotion analysis from spoken words was skipped.")
 
 
 # Demo mode updates the current input on each rerun. Captured mode uses the last extracted feature set.
@@ -485,6 +523,11 @@ else:
     a.metric("Visual positive cue", f'{current["visual"]:.2f}')
     b.metric("Audio arousal cue", f'{current["audio"]:.2f}')
     c.metric("Uncertainty cue", f'{current["uncertainty"]:.2f}')
+
+    if st.session_state.transcript:
+        st.markdown("#### Automatically detected speech")
+        st.write(st.session_state.transcript)
+        st.caption("Check the transcript for speech-recognition mistakes; errors can affect the emotion estimate.")
 
     if st.session_state.emotion_scores:
         emotion_scores = st.session_state.emotion_scores
