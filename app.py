@@ -1,6 +1,9 @@
 import io
 import math
+import os
 import re
+import subprocess
+import tempfile
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -287,7 +290,7 @@ require_app_password()
 
 
 RESPONSES = ["Supportive", "Neutral", "Upbeat"]
-FEATURES = ["Visual positive cue", "Audio arousal cue", "Uncertainty cue"]
+FEATURES = ["Visual positive cue", "Audio cue", "Uncertainty cue"]
 
 def init_state():
     if "W" not in st.session_state:
@@ -649,6 +652,80 @@ def audio_features(audio_bytes):
             f"Details: {e}"
         ]
 
+
+def extract_video_frames(video_bytes, max_frames=5):
+    """Sample a few frames from an uploaded video."""
+    temp_path = None
+    try:
+        import cv2
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_video:
+            temp_video.write(video_bytes)
+            temp_path = temp_video.name
+        cap = cv2.VideoCapture(temp_path)
+        if not cap.isOpened():
+            return [], ["Could not open this video. Try an MP4 or MOV file."]
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if frame_count <= 0:
+            cap.release()
+            return [], ["No readable frames were found in the video."]
+        indexes = np.linspace(0, frame_count - 1, min(max_frames, frame_count), dtype=int)
+        frames = []
+        for index in sorted(set(int(i) for i in indexes)):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+            ok, frame = cap.read()
+            if ok:
+                encoded_ok, encoded = cv2.imencode(".jpg", frame)
+                if encoded_ok:
+                    frames.append(encoded.tobytes())
+        cap.release()
+        return frames, [f"Sampled {len(frames)} frame(s) across the uploaded video."]
+    except Exception as exc:
+        return [], [f"Video frame extraction failed ({type(exc).__name__})."]
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def extract_video_audio(video_bytes):
+    """Extract a mono WAV audio track from a video using bundled FFmpeg."""
+    video_path = audio_path = None
+    try:
+        import imageio_ffmpeg
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as video_file:
+            video_file.write(video_bytes)
+            video_path = video_file.name
+        audio_handle = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        audio_path = audio_handle.name
+        audio_handle.close()
+        result = subprocess.run(
+            [ffmpeg, "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000",
+             "-c:a", "pcm_s16le", audio_path],
+            capture_output=True, text=True, timeout=90
+        )
+        if result.returncode != 0 or not os.path.exists(audio_path) or os.path.getsize(audio_path) < 44:
+            return None, ["No readable audio track was found in the video."]
+        with open(audio_path, "rb") as audio_file:
+            return audio_file.read(), ["Extracted the video's audio track for acoustic features and speech transcription."]
+    except subprocess.TimeoutExpired:
+        return None, ["Audio extraction timed out. Try a shorter video."]
+    except Exception as exc:
+        return None, [f"Could not extract video audio ({type(exc).__name__})."]
+    finally:
+        for path in (video_path, audio_path):
+            if path and os.path.exists(path):
+                os.remove(path)
+
+
+def average_emotion_scores(score_sets):
+    """Average emotion scores from sampled video frames."""
+    valid = [scores for scores in score_sets if scores]
+    if not valid:
+        return None
+    return {label: float(np.mean([scores.get(label, 0.0) for scores in valid]))
+            for label in EMOTION_LABELS}
+
+
 def make_response(pred, visual, audio, uncertain):
     if uncertain > 0.7:
         return "I couldn't confidently interpret the available signals. Would you like to try again or tell me how you're feeling?"
@@ -682,7 +759,7 @@ border: 1px solid #F3C2D6; box-shadow: 0 10px 28px rgba(169,47,101,.08);">
 </div>
 """, unsafe_allow_html=True)
 st.markdown(
-    "Camera and microphone cues feed a small Hebbian association network. "
+    "Video frames and the video's audio track feed a small Hebbian association network. "
     "A simulated artificial endocrine system modulates how strongly the network learns."
 )
 
@@ -744,71 +821,79 @@ st.markdown(
 
 
 if st.session_state.active_page == "Emotion Studio":
-    mode = st.radio("Input mode", ["Demo / simulated signals", "Camera + microphone"], horizontal=True)
+    mode = st.radio("Input mode", ["Demo / simulated signals", "Upload a video"], horizontal=True)
 
-    st.caption("In Camera + microphone mode, recorded speech is transcribed automatically and the transcript is analyzed for emotional language. No typing is required.")
-    if mode == "Camera + microphone":
+    st.caption("Upload one video. NEUROENDO samples frames for visible-expression cues and extracts its audio track for speech and acoustic cues.")
+
+    if mode == "Upload a video":
         st.markdown("""
         <div class="neo-studio">
-          <div style="font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;font-weight:850;color:#A92F65;">Multimodal capture studio</div>
-          <div style="font-size:1.22rem;font-weight:850;color:#432A38;margin:.25rem 0;">A moment, three kinds of signals</div>
-          <div style="color:#806A76;font-size:.88rem;">Capture a still image and a short speech clip. Review the transcript and estimate before teaching the model.</div>
-          <span class="neo-step active">01 · Capture</span><span class="neo-step">02 · Analyze</span><span class="neo-step">03 · Review & learn</span>
-          <div class="neo-wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
-          <div style="font-size:.7rem;color:#806A76;">Decorative signal motif · not a live audio waveform</div>
+          <div style="font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;font-weight:850;color:#A92F65;">Video analysis studio</div>
+          <div style="font-size:1.22rem;font-weight:850;color:#432A38;margin:.25rem 0;">One video, visual + audio cues ✨</div>
+          <div style="color:#806A76;font-size:.88rem;">Upload a short video with a visible face and spoken audio. The app samples frames and analyzes the extracted sound.</div>
+          <span class="neo-step active">01 · Upload</span><span class="neo-step">02 · Analyze</span><span class="neo-step">03 · Review & learn</span>
         </div>
         """, unsafe_allow_html=True)
-
-    col1, col2 = st.columns(2)
-    visual_cue = None
-    audio_cue = None
-    visual_uncertainty = 0.0
-    notes = []
-
-    if mode == "Demo / simulated signals":
-        with col1:
-            visual_cue = st.slider("Visual positive cue (simulated)", 0.0, 1.0, 0.7, 0.1)
-        with col2:
-            audio_cue = st.slider("Audio arousal cue (simulated)", 0.0, 1.0, 0.4, 0.1)
-        visual_uncertainty = st.slider("Visual uncertainty (simulated)", 0.0, 1.0, 0.2, 0.1)
-        notes = ["Demo inputs are simulated so the algorithm can be demonstrated consistently."]
-    else:
-        st.info("Capture a still image and record a short audio clip. The app transcribes the recording automatically, then analyzes the words alongside facial-expression cues. Streamlit built-in controls record clips rather than providing continuous always-on listening.")
-        with col1:
-            img_file = st.camera_input("Capture visual input")
-        with col2:
-            audio_file = st.audio_input("Record a short audio clip")
-            if st.session_state.transcript:
-                st.markdown('<div style="margin-top:.55rem;padding:.65rem .8rem;border-radius:12px;background:#E8F7EF;border:1px solid #B9E4CB;color:#276749;font-weight:750;">✓ Speech transcribed · transcript ready</div>', unsafe_allow_html=True)
-            elif audio_file is not None:
-                st.markdown('<div style="margin-top:.55rem;padding:.65rem .8rem;border-radius:12px;background:#FFF0E5;border:1px solid #F3C5AD;color:#96552F;font-weight:750;">● Audio ready · extract to transcribe</div>', unsafe_allow_html=True)
+        video_file = st.file_uploader(
+            "Choose a video file",
+            type=["mp4", "mov", "m4v", "webm", "avi"],
+            help="Short clips work best. Video processing is sample-based analysis, not live tracking."
+        )
+        if video_file is not None:
+            st.video(video_file)
+            st.caption(f"Selected: {video_file.name} · {video_file.size / (1024 * 1024):.1f} MB")
+        if st.button("Analyze video", type="primary"):
+            if video_file is None:
+                st.warning("Upload a video first.")
             else:
-                st.markdown('<div style="margin-top:.55rem;padding:.65rem .8rem;border-radius:12px;background:#FCE7F0;border:1px solid #F0C6D6;color:#A92F65;font-weight:750;">◌ Waiting for your recording</div>', unsafe_allow_html=True)
-        if st.button("Extract features from captured media"):
-            if img_file is None or audio_file is None:
-                st.warning("Capture both an image and an audio clip first.")
-            else:
-                visual_cue, visual_uncertainty, vnotes = visual_features(img_file.getvalue())
-                face_scores, face_notes = infer_facial_emotion(img_file.getvalue())
-                audio_bytes = audio_file.getvalue()
-                st.session_state.transcript = ""
-                audio_cue, anot = audio_features(audio_bytes)
-                transcript, speech_notes = transcribe_audio(audio_bytes)
-                st.session_state.transcript = transcript
-                text_scores, text_notes = infer_text_emotion(transcript) if transcript else (None, [])
-                st.session_state.emotion_scores = combine_emotion_scores(
-                    text_scores=text_scores, face_scores=face_scores, audio_arousal=audio_cue
-                )
-                st.session_state.emotion_notes = speech_notes + text_notes + face_notes + anot
-                st.session_state.emotion_source = "spoken words + face + acoustic proxy"
-                st.session_state.last_features = {
-                    "visual": visual_cue, "audio": audio_cue, "uncertainty": visual_uncertainty
-                }
-                st.session_state.last_notes = vnotes + anot
-                if transcript:
-                    st.success("Audio transcribed and features extracted. Review the transcript and emotion estimate below.")
-                else:
-                    st.warning("Features extracted, but no transcript was available. Emotion analysis from spoken words was skipped.")
+                video_bytes = video_file.getvalue()
+                with st.spinner("Sampling video frames and extracting audio…"):
+                    frame_bytes, frame_notes = extract_video_frames(video_bytes)
+                    audio_bytes, audio_extract_notes = extract_video_audio(video_bytes)
+                    if not frame_bytes:
+                        st.error("I couldn't read frames from this video. Try a short MP4 or MOV clip.")
+                    else:
+                        visual_results = [visual_features(frame) for frame in frame_bytes]
+                        visual_cue = float(np.mean([result[0] for result in visual_results]))
+                        visual_uncertainty = float(np.mean([result[1] for result in visual_results]))
+                        vnotes = frame_notes + [note for result in visual_results for note in result[2]]
+                        face_score_sets = []
+                        face_notes = []
+                        for frame in frame_bytes:
+                            frame_scores, frame_note = infer_facial_emotion(frame)
+                            if frame_scores:
+                                face_score_sets.append(frame_scores)
+                            face_notes.extend(frame_note)
+                        face_scores = average_emotion_scores(face_score_sets)
+
+                        st.session_state.transcript = ""
+                        audio_cue = 0.0
+                        anot = []
+                        speech_notes = []
+                        text_scores = None
+                        if audio_bytes:
+                            audio_cue, anot = audio_features(audio_bytes)
+                            transcript, speech_notes = transcribe_audio(audio_bytes)
+                            st.session_state.transcript = transcript
+                            text_scores, text_notes = infer_text_emotion(transcript) if transcript else (None, [])
+                        else:
+                            text_notes = ["No audio track was available; spoken-word and acoustic analysis were skipped."]
+
+                        st.session_state.emotion_scores = combine_emotion_scores(
+                            text_scores=text_scores, face_scores=face_scores, audio_arousal=audio_cue
+                        )
+                        st.session_state.emotion_notes = speech_notes + text_notes + face_notes + anot + audio_extract_notes
+                        st.session_state.emotion_source = "sampled video frames + extracted audio"
+                        st.session_state.last_features = {
+                            "visual": visual_cue, "audio": audio_cue, "uncertainty": visual_uncertainty
+                        }
+                        st.session_state.last_notes = vnotes + anot + audio_extract_notes
+                        if st.session_state.transcript:
+                            st.success("Video analyzed! Sampled frames and spoken words are ready to review.")
+                        elif audio_bytes:
+                            st.warning("Video frames and audio were analyzed, but no speech transcript was available.")
+                        else:
+                            st.warning("Video frames were analyzed, but no usable audio track was found.")
 
 
     # Demo mode updates the current input on each rerun. Captured mode uses the last extracted feature set.
@@ -825,7 +910,7 @@ if st.session_state.active_page == "Emotion Studio":
     with st.expander("System architecture", expanded=False):
         st.markdown("""
         ```text
-        Camera / microphone or demo signals
+        Uploaded video (sampled frames + audio) or demo signals
                        |
                        v
            Classical feature extraction
@@ -848,7 +933,7 @@ if st.session_state.active_page == "Emotion Studio":
     st.markdown('<div class="neo-section"><span class="neo-number">01</span><span class="neo-heading">Learning &amp; response</span><span class="neo-kicker">Live interaction</span></div>', unsafe_allow_html=True)
 
     if current is None:
-        st.info("Select Demo mode or capture both an image and audio clip, then extract features.")
+        st.info("Select Demo mode or upload a video and click Analyze video.")
     else:
         x = np.array([current["visual"], current["audio"], current["uncertainty"]], dtype=float)
         # Bias toward a neutral response initially to avoid arbitrary argmax ties.
