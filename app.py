@@ -185,6 +185,59 @@ html { scroll-behavior: smooth; scrollbar-color: #E58AAF #FFF0E5; scrollbar-widt
   .neo-wave span,.neo-node,.neo-edge { animation:none !important; }
 }
 
+
+/* Cute finishing touches: soft bubbles, sparkle accents, and friendlier controls */
+.neo-hero::after {
+  content: "✦  ♡  ✧";
+  position: absolute;
+  right: 1.4rem;
+  top: 1rem;
+  color: #D94F87;
+  font-size: 1.35rem;
+  letter-spacing: .28rem;
+  opacity: .72;
+  transform: rotate(7deg);
+  pointer-events: none;
+}
+.neo-hero::before {
+  content: "·  ·  ·";
+  position: absolute;
+  right: 1.5rem;
+  bottom: 1rem;
+  color: #E6A27F;
+  font-size: 1.5rem;
+  letter-spacing: .42rem;
+  opacity: .75;
+  pointer-events: none;
+}
+.neo-pill { box-shadow: 0 3px 9px rgba(169,47,101,.045); transition: transform .18s ease, background .18s ease; }
+.neo-pill:hover { transform: translateY(-2px) rotate(-1deg); background: #fff !important; }
+.neo-brand-mark { border: 2px solid rgba(255,255,255,.72); outline: 3px solid rgba(217,79,135,.09); }
+[data-testid="stMetric"] { position: relative; overflow: hidden; }
+[data-testid="stMetric"]::after {
+  content: "✧";
+  position: absolute;
+  right: .75rem;
+  top: .35rem;
+  color: #E7A1BD;
+  font-size: 1rem;
+  opacity: .7;
+  pointer-events: none;
+}
+.stButton > button, .stFormSubmitButton > button { border-radius: 999px; }
+[data-testid="stSidebar"] .stButton > button { border-radius: 15px; }
+.stRadio [role="radio"] { border: 1px solid transparent; }
+.stRadio [role="radio"][aria-checked="true"] { background: white; border-color: #E7A0BD; box-shadow: 0 4px 12px rgba(169,47,101,.08); }
+.neo-step { box-shadow: 0 2px 7px rgba(169,47,101,.035); }
+.neo-insight-card { box-shadow: 0 6px 16px rgba(169,47,101,.045); transition: transform .18s ease, box-shadow .18s ease; }
+.neo-insight-card:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(169,47,101,.09); }
+[data-testid="stCameraInput"], [data-testid="stAudioInput"] { box-shadow: 0 5px 14px rgba(169,47,101,.035); }
+[data-testid="stExpander"] { box-shadow: 0 4px 12px rgba(169,47,101,.025); }
+@media (max-width: 700px) {
+  .neo-hero::after { right: .8rem; top: .55rem; font-size: 1rem; }
+  .neo-hero::before { right: .8rem; bottom: .45rem; font-size: 1.1rem; }
+}
+
 </style>
 """, unsafe_allow_html=True)
 
