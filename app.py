@@ -676,10 +676,16 @@ class LiveCaptureBuffer:
             self.sample_rate = 48000
 
     def add_video(self, frame):
+        # Keep the network stream light: downscale before encoding and sample
+        # only about once per second instead of processing every incoming frame.
+        height, width = frame.shape[:2]
+        if width > 480:
+            target_h = max(1, int(height * (480 / width)))
+            frame = cv2.resize(frame, (480, target_h), interpolation=cv2.INTER_AREA)
         with self.lock:
             self.video_counter += 1
-            if self.video_counter % 45 == 0 and len(self.frames) < 8:
-                ok, encoded = cv2.imencode(".jpg", frame)
+            if self.video_counter % 10 == 0 and len(self.frames) < 8:
+                ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
                 if ok:
                     self.frames.append(encoded.tobytes())
 
@@ -932,12 +938,12 @@ if st.session_state.active_page == "Emotion Studio":
             key="neuroendo-live-recorder",
             mode=WebRtcMode.SENDRECV,
             rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}),
-            media_stream_constraints={"video": True, "audio": True},
+            media_stream_constraints={\n                "video": {"width": {"ideal": 480, "max": 640}, "height": {"ideal": 360, "max": 480}, "frameRate": {"ideal": 10, "max": 12}},\n                "audio": {"echoCancellation": True, "noiseSuppression": True, "autoGainControl": True},\n            },
             video_processor_factory=lambda: WebcamVideoProcessor(capture_buffer),
             audio_processor_factory=lambda: MicrophoneAudioProcessor(capture_buffer),
             async_processing=True,
         )
-        st.caption("Recording stays in this app session. Audio capture is capped at 30 seconds; sampled video frames are used for expression cues.")
+        st.caption("Low-bandwidth recording mode: up to 480 px wide at 10–12 FPS. Audio capture is capped at 30 seconds; about one frame per second is sampled for expression cues.")
         if webrtc_ctx.state.playing:
             st.info("Recording is active. Speak clearly, then press STOP in the recorder above.")
         captured_frames, captured_audio = capture_buffer.snapshot()
@@ -1003,7 +1009,7 @@ if st.session_state.active_page == "Emotion Studio":
     with st.expander("System architecture", expanded=False):
         st.markdown("""
         ```text
-        Uploaded video (sampled frames + audio) or demo signals
+        Recorded webcam + microphone or demo signals
                        |
                        v
            Classical feature extraction
