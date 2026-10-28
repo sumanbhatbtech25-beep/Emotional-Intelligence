@@ -1,6 +1,9 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
+from neuroendo.learning import init_state, render_network_svg, run_ab_experiment, clip, endocrine_modulation, make_response, update_endocrine
+from neuroendo.emotion import EMOTION_LABELS, classify_text_fallback, transcribe_audio, infer_text_emotion, infer_facial_emotion, combine_emotion_scores, visual_features, audio_features, average_emotion_scores
+from neuroendo.media import LiveCaptureBuffer, WebcamVideoProcessor, MicrophoneAudioProcessor, extract_video_frames, extract_video_audio, webrtc_streamer, WebRtcMode, RTCConfiguration
 
 
 st.set_page_config(page_title="NEUROENDO", page_icon="🧠", layout="wide")
@@ -284,10 +287,6 @@ require_app_password()
 
 RESPONSES = ["Supportive", "Neutral", "Upbeat"]
 FEATURES = ["Visual positive cue", "Audio cue", "Uncertainty cue"]
-from neuroendo.learning import init_state, render_network_svg, run_ab_experiment, clip, endocrine_modulation, make_response, update_endocrine
-from neuroendo.emotion import EMOTION_LABELS, classify_text_fallback, transcribe_audio, infer_text_emotion, infer_facial_emotion, combine_emotion_scores, visual_features, audio_features, average_emotion_scores
-from neuroendo.media import LiveCaptureBuffer, WebcamVideoProcessor, MicrophoneAudioProcessor, extract_video_frames, extract_video_audio, webrtc_streamer, WebRtcMode, RTCConfiguration
-
 init_state()
 
 st.markdown("""
