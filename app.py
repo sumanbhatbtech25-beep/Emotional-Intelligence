@@ -825,6 +825,17 @@ if st.session_state.active_page == "Emotion Studio":
 
     st.caption("Upload one video. NEUROENDO samples frames for visible-expression cues and extracts its audio track for speech and acoustic cues.")
 
+    if mode == "Demo / simulated signals":
+        st.caption("Adjust these simulated cues to explore how the learning system responds without uploading a video.")
+        demo_col1, demo_col2, demo_col3 = st.columns(3)
+        with demo_col1:
+            visual_cue = st.slider("Visual cue", 0.0, 1.0, 0.55, 0.05, help="Simulated expression-related cue.")
+        with demo_col2:
+            audio_cue = st.slider("Audio arousal cue", 0.0, 1.0, 0.35, 0.05, help="Simulated acoustic arousal cue.")
+        with demo_col3:
+            visual_uncertainty = st.slider("Signal uncertainty", 0.0, 1.0, 0.20, 0.05, help="Simulated uncertainty in the visual signal.")
+        notes = ["Demo mode is using simulated visual, audio, and uncertainty values."]
+        
     if mode == "Upload a video":
         st.markdown("""
         <div class="neo-studio">
