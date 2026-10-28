@@ -140,6 +140,51 @@ html { scroll-behavior: smooth; scrollbar-color: #E58AAF #FFF0E5; scrollbar-widt
 @keyframes neo-glow { 0%,100% { box-shadow:0 10px 28px rgba(169,47,101,.08); } 50% { box-shadow:0 14px 34px rgba(169,47,101,.14); } }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation:none !important; scroll-behavior:auto !important; transition:none !important; } }
 @media (max-width:700px) { .neo-section { gap:.55rem; padding:.7rem; } .neo-section .neo-kicker { display:none; } .neo-section .neo-heading { font-size:1rem; } }
+
+/* Premium workspace, recording studio, visualization and accessibility polish */
+.neo-brand { display:flex;align-items:center;gap:.7rem;padding:.35rem .2rem 1rem; }
+.neo-brand-mark { display:flex;align-items:center;justify-content:center;width:43px;height:43px;border-radius:15px;background:linear-gradient(140deg,#D94F87,#F5B99D);color:#fff;font-size:1.35rem;box-shadow:0 7px 18px rgba(169,47,101,.18); }
+.neo-brand-name { font-size:1.12rem;font-weight:900;letter-spacing:-.035em;color:#432A38; }
+.neo-brand-sub { font-size:.68rem;color:#806A76;letter-spacing:.08em;text-transform:uppercase;font-weight:800; }
+.neo-sidebar-label { margin:.5rem 0 .45rem;color:#A92F65;font-size:.68rem;font-weight:850;letter-spacing:.13em;text-transform:uppercase; }
+[data-testid="stSidebar"] .stButton > button { text-align:left;min-height:3.05rem;border-radius:13px; }
+[data-testid="stSidebar"] .stButton > button[kind="primary"] { background:linear-gradient(120deg,#D94F87,#C7477D); }
+.neo-page-meta { display:flex;align-items:center;gap:.55rem;margin:.15rem 0 1rem;color:#806A76;font-size:.82rem; }
+.neo-live-dot { width:8px;height:8px;border-radius:50%;background:#D94F87;display:inline-block;box-shadow:0 0 0 4px rgba(217,79,135,.12); }
+.neo-studio { padding:1rem 1.1rem;border:1px solid #F0C3D5;border-radius:19px;background:linear-gradient(115deg,rgba(252,225,237,.92),rgba(255,235,221,.9),rgba(255,255,255,.72));margin:.5rem 0 1rem; }
+.neo-step { display:inline-flex;align-items:center;gap:.35rem;padding:.36rem .62rem;margin:.25rem .25rem .1rem 0;border-radius:999px;border:1px solid #F0C6D6;background:rgba(255,255,255,.78);font-size:.74rem;font-weight:750;color:#806A76; }
+.neo-step.active { background:#FCE1ED;color:#A92F65;border-color:#E7A0BD; }
+.neo-wave { height:37px;display:flex;align-items:center;gap:4px;margin:.55rem 0 .1rem; }
+.neo-wave span { display:block;width:5px;border-radius:9px;background:linear-gradient(180deg,#D94F87,#F5B99D);animation:neo-wave 1.05s ease-in-out infinite; }
+.neo-wave span:nth-child(3n) { animation-delay:-.7s; }.neo-wave span:nth-child(3n + 1) { animation-delay:-.35s; }
+@keyframes neo-wave { 0%,100% { height:9px;opacity:.58; } 50% { height:29px;opacity:1; } }
+.neo-network-card { border:1px solid #F0C6D6;border-radius:20px;padding:.65rem;background:linear-gradient(145deg,rgba(255,255,255,.92),rgba(252,231,240,.6));overflow:hidden; }
+.neo-node { transform-box:fill-box;transform-origin:center;animation:neo-node-pulse 2.8s ease-in-out infinite; }
+.neo-node:nth-of-type(2n) { animation-delay:-1.2s; }
+.neo-edge { animation:neo-edge-pulse 3.2s ease-in-out infinite; }
+@keyframes neo-node-pulse { 0%,100% { opacity:.82; } 50% { opacity:1; } }
+@keyframes neo-edge-pulse { 0%,100% { stroke-opacity:.3; } 50% { stroke-opacity:.8; } }
+.neo-insight-card { padding:.9rem 1rem;border-radius:16px;border:1px solid #F0C6D6;background:rgba(255,255,255,.8);height:100%; }
+.neo-insight-label { font-size:.72rem;color:#806A76;font-weight:750;text-transform:uppercase;letter-spacing:.08em; }
+.neo-insight-value { font-size:1.45rem;font-weight:900;color:#A92F65;margin-top:.2rem; }
+[data-testid="stCameraInput"],[data-testid="stAudioInput"] { border:1px solid #F0C6D6;border-radius:16px;padding:.65rem;background:rgba(255,255,255,.65); }
+[data-testid="stCameraInput"] button,[data-testid="stAudioInput"] button { min-height:2.7rem; }
+[data-testid="stProgress"] { border-radius:999px;overflow:hidden; }
+.stButton > button:active { transform:scale(.985); }
+@media (max-width: 768px) {
+  .block-container { padding:1rem .8rem 2rem; }
+  .neo-hero { padding:1.15rem !important;border-radius:19px !important; }
+  .neo-hero div[style*="font-size:2.35rem"] { font-size:1.8rem !important; }
+  .neo-section { flex-wrap:wrap; }
+  .neo-section .neo-kicker { margin-left:0; }
+  .neo-studio { padding:.85rem; }
+  .neo-network-card { padding:.25rem; }
+  [data-testid="stMetric"] { padding:.75rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .neo-wave span,.neo-node,.neo-edge { animation:none !important; }
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -224,6 +269,43 @@ def clip(x, lo=0.0, hi=1.0):
 def endocrine_modulation(reward, stress):
     # Proposed engineering rule, not a biological law.
     return clip(1.0 + reward - stress, 0.2, 1.5)
+
+
+def render_network_svg(weights):
+    """Render a lightweight animated SVG of feature-to-response associations."""
+    input_nodes = [(78, 70), (78, 145), (78, 220)]
+    output_nodes = [(322, 70), (322, 145), (322, 220)]
+    feature_labels = ["Visual", "Audio", "Uncertainty"]
+    response_labels = ["Supportive", "Neutral", "Upbeat"]
+    parts = [
+        '<div class="neo-network-card">',
+        '<svg viewBox="0 0 400 280" role="img" aria-label="Animated neural association network" style="width:100%;height:auto;display:block;">',
+        '<text x="78" y="25" text-anchor="middle" font-size="11" font-weight="800" fill="#A92F65">INPUT FEATURES</text>',
+        '<text x="322" y="25" text-anchor="middle" font-size="11" font-weight="800" fill="#A92F65">RESPONSE NODES</text>',
+    ]
+    for i, (x1, y1) in enumerate(input_nodes):
+        for j, (x2, y2) in enumerate(output_nodes):
+            value = float(weights[i, j])
+            strength = min(1.0, abs(value) / 1.5)
+            stroke = "#D94F87" if value >= 0 else "#8E77B5"
+            width = 1.1 + 4.2 * strength
+            opacity = 0.24 + 0.66 * strength
+            parts.append(
+                f'<line class="neo-edge" x1="{x1+22}" y1="{y1}" x2="{x2-22}" y2="{y2}" '
+                f'stroke="{stroke}" stroke-width="{width:.2f}" stroke-opacity="{opacity:.2f}" stroke-linecap="round"/>'
+            )
+    for i, (x, y) in enumerate(input_nodes):
+        parts.append(f'<circle class="neo-node" cx="{x}" cy="{y}" r="22" fill="#FCE1ED" stroke="#D94F87" stroke-width="1.5"/>')
+        parts.append(f'<text x="{x}" y="{y+4}" text-anchor="middle" font-size="9" font-weight="800" fill="#7C3154">{["V","A","U"][i]}</text>')
+        parts.append(f'<text x="{x}" y="{y+37}" text-anchor="middle" font-size="9.5" fill="#806A76">{feature_labels[i]}</text>')
+    for j, (x, y) in enumerate(output_nodes):
+        parts.append(f'<circle class="neo-node" cx="{x}" cy="{y}" r="22" fill="#FFEBDD" stroke="#E6A27F" stroke-width="1.5"/>')
+        parts.append(f'<text x="{x}" y="{y+4}" text-anchor="middle" font-size="9" font-weight="800" fill="#8A4E36">{["S","N","U"][j]}</text>')
+        parts.append(f'<text x="{x}" y="{y+37}" text-anchor="middle" font-size="9.5" fill="#806A76">{response_labels[j]}</text>')
+    parts.append('</svg><div style="display:flex;justify-content:center;gap:1rem;flex-wrap:wrap;font-size:.72rem;color:#806A76;padding:.25rem .2rem .45rem;">'
+                 '<span>━ Stronger line = larger learned weight</span><span style="color:#D94F87;">━ Positive</span><span style="color:#8E77B5;">━ Negative</span></div></div>')
+    return "".join(parts)
+
 
 def run_ab_experiment(seed=42, samples=120):
     """Compare ordinary and endocrine-modulated Hebbian updates on identical data."""
@@ -551,53 +633,59 @@ st.markdown(
     "A simulated artificial endocrine system modulates how strongly the network learns."
 )
 
+
+# Premium sidebar navigation and persistent endocrine controls.
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "Emotion Studio"
+
 with st.sidebar:
-    st.header("Endocrine controller")
-    st.write("These are simulated regulatory variables, not measured biological hormones.")
+    st.markdown("""
+    <div class="neo-brand">
+      <div class="neo-brand-mark">🧠</div>
+      <div><div class="neo-brand-name">NEUROENDO</div><div class="neo-brand-sub">Emotion · Learning · Adaptation</div></div>
+    </div>
+    <div class="neo-sidebar-label">Workspace</div>
+    """, unsafe_allow_html=True)
+    pages = [
+        ("Emotion Studio", "♡", "Capture & learn"),
+        ("Model Insights", "⌘", "Weights & history"),
+        ("A/B Experiment", "⇄", "Compare learning"),
+    ]
+    for page_name, page_icon, page_label in pages:
+        selected = st.session_state.active_page == page_name
+        if st.button(
+            f"{page_icon}   {page_name}  {'✓' if selected else ''}",
+            key="nav_" + page_name,
+            use_container_width=True,
+            type="primary" if selected else "secondary",
+            help=page_label,
+        ):
+            st.session_state.active_page = page_name
+            st.rerun()
+    st.caption("Choose a workspace to keep each task focused.")
+    st.divider()
+    st.markdown('<div class="neo-sidebar-label">Artificial endocrine controller</div>', unsafe_allow_html=True)
+    st.write("Simulated regulatory variables — not measured biological hormones.")
     st.session_state.reward = st.slider("Reward-like signal (D)", 0.0, 1.0, float(st.session_state.reward), 0.05)
     st.session_state.stress = st.slider("Stress-like signal (S)", 0.0, 1.0, float(st.session_state.stress), 0.05)
     mod = endocrine_modulation(st.session_state.reward, st.session_state.stress)
     st.metric("Learning modulation g(H)", f"{mod:.2f}×")
     st.caption("Rule: g(H) = clip(1 + D − S, 0.2, 1.5)")
-    if st.button("Reset learned weights and history"):
+    if st.button("Reset learned weights and history", use_container_width=True):
         st.session_state.W = np.zeros((3, 3), dtype=float)
         st.session_state.history = []
         st.session_state.last_x = None
         st.session_state.last_features = None
         st.session_state.last_pred = None
         st.session_state.last_notes = []
+        st.session_state.emotion_scores = None
+        st.session_state.emotion_notes = []
+        st.session_state.transcript = ""
+        st.session_state.ab_results = None
         st.rerun()
 
-
-# Button-driven screens: only the selected workspace is rendered.
-if "active_page" not in st.session_state:
-    st.session_state.active_page = "Emotion Studio"
-
-st.markdown("""
-<div style="margin:1.1rem 0 .55rem;color:#A92F65;font-size:.72rem;font-weight:850;letter-spacing:.14em;text-transform:uppercase;">Your workspace</div>
-""", unsafe_allow_html=True)
-nav_cols = st.columns(3, gap="small")
-pages = [
-    ("Emotion Studio", "01  ·  Capture & learn"),
-    ("Model Insights", "02  ·  Weights & history"),
-    ("A/B Experiment", "03  ·  Compare learning"),
-]
-for nav_col, (page_name, page_label) in zip(nav_cols, pages):
-    with nav_col:
-        selected = st.session_state.active_page == page_name
-        if st.button(
-            ("✦  " if selected else "") + page_name + "\n" + page_label,
-            key="nav_" + page_name,
-            use_container_width=True,
-            type="primary" if selected else "secondary",
-        ):
-            st.session_state.active_page = page_name
-            st.rerun()
-
 st.markdown(
-    f'<div style="display:flex;align-items:center;gap:.55rem;margin:.35rem 0 1rem;color:#806A76;font-size:.82rem;">'
-    f'<span style="width:8px;height:8px;border-radius:50%;background:#D94F87;display:inline-block;"></span>'
-    f'Currently viewing <strong style="color:#A92F65;">{st.session_state.active_page}</strong></div>',
+    f'<div class="neo-page-meta"><span class="neo-live-dot"></span>Workspace / <strong style="color:#A92F65;">{st.session_state.active_page}</strong></div>',
     unsafe_allow_html=True,
 )
 
@@ -606,6 +694,17 @@ if st.session_state.active_page == "Emotion Studio":
     mode = st.radio("Input mode", ["Demo / simulated signals", "Camera + microphone"], horizontal=True)
 
     st.caption("In Camera + microphone mode, recorded speech is transcribed automatically and the transcript is analyzed for emotional language. No typing is required.")
+    if mode == "Camera + microphone":
+        st.markdown("""
+        <div class="neo-studio">
+          <div style="font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;font-weight:850;color:#A92F65;">Multimodal capture studio</div>
+          <div style="font-size:1.22rem;font-weight:850;color:#432A38;margin:.25rem 0;">A moment, three kinds of signals</div>
+          <div style="color:#806A76;font-size:.88rem;">Capture a still image and a short speech clip. Review the transcript and estimate before teaching the model.</div>
+          <span class="neo-step active">01 · Capture</span><span class="neo-step">02 · Analyze</span><span class="neo-step">03 · Review & learn</span>
+          <div class="neo-wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+          <div style="font-size:.7rem;color:#806A76;">Decorative signal motif · not a live audio waveform</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
     visual_cue = None
@@ -738,6 +837,12 @@ if st.session_state.active_page == "Emotion Studio":
             st.markdown("**Relative signal strength**")
             st.progress(max(0.0, min(1.0, best_score)))
             st.caption("This is a relative model score, not a calibrated probability or diagnosis. Visible expressions and spoken words do not prove how someone feels.")
+            st.markdown("**Signal distribution**")
+            emotion_chart_df = pd.DataFrame({
+                "Relative score": emotion_scores
+            }).sort_values("Relative score", ascending=True)
+            st.bar_chart(emotion_chart_df, horizontal=True)
+            st.caption("Scores summarize model outputs; they should be interpreted as uncertain cues, not ground truth.")
             with st.expander("How this estimate was formed"):
                 for note in st.session_state.emotion_notes:
                     st.write(f"- {note}")
@@ -789,6 +894,9 @@ if st.session_state.active_page == "Model Insights":
     st.markdown('<div class="neo-section"><span class="neo-number">02</span><span class="neo-heading">Inside the model</span><span class="neo-kicker">Weights &amp; history</span></div>', unsafe_allow_html=True)
 
     w_df = pd.DataFrame(st.session_state.W, index=FEATURES, columns=RESPONSES)
+    st.markdown("**Learned association network**")
+    st.markdown(render_network_svg(st.session_state.W), unsafe_allow_html=True)
+    st.caption("The diagram is animated for visual clarity. Connection thickness reflects the current learned weight magnitude.")
     st.markdown("**Hebbian weight matrix** — rows are input features, columns are response neurons.")
     st.dataframe(w_df.style.format("{:.3f}"), use_container_width=True)
 
@@ -850,9 +958,21 @@ if st.session_state.active_page == "A/B Experiment":
     if st.session_state.ab_results is not None:
         ab = st.session_state.ab_results
         a1, a2, a3 = st.columns(3)
-        a1.metric("Ordinary Hebbian accuracy", f"{ab['plain_accuracy']:.1%}")
-        a2.metric("Endocrine-modulated accuracy", f"{ab['endo_accuracy']:.1%}")
-        a3.metric("Difference (B − A)", f"{(ab['endo_accuracy'] - ab['plain_accuracy']):+.1%}")
+        a1.metric("Model A · Ordinary", f"{ab['plain_accuracy']:.1%}")
+        a2.metric("Model B · Endocrine", f"{ab['endo_accuracy']:.1%}")
+        difference = ab["endo_accuracy"] - ab["plain_accuracy"]
+        a3.metric("Difference · B − A", f"{difference:+.1%}", delta=f"{difference:+.1%}")
+        result_left, result_right = st.columns(2)
+        with result_left:
+            st.markdown(f'<div class="neo-insight-card"><div class="neo-insight-label">Ordinary Hebbian · Model A</div><div class="neo-insight-value">{ab["plain_accuracy"]:.1%}</div><div style="height:8px;border-radius:99px;background:#F7E2EB;overflow:hidden;margin-top:.6rem;"><div style="width:{100*ab["plain_accuracy"]:.1f}%;height:100%;background:linear-gradient(90deg,#D94F87,#E88FB2);border-radius:99px;"></div></div><div style="font-size:.75rem;color:#806A76;margin-top:.45rem;">Baseline update rule</div></div>', unsafe_allow_html=True)
+        with result_right:
+            st.markdown(f'<div class="neo-insight-card"><div class="neo-insight-label">Endocrine-modulated · Model B</div><div class="neo-insight-value">{ab["endo_accuracy"]:.1%}</div><div style="height:8px;border-radius:99px;background:#F7E2EB;overflow:hidden;margin-top:.6rem;"><div style="width:{100*ab["endo_accuracy"]:.1f}%;height:100%;background:linear-gradient(90deg,#F0A57F,#D94F87);border-radius:99px;"></div></div><div style="font-size:.75rem;color:#806A76;margin-top:.45rem;">Feedback-modulated update rule</div></div>', unsafe_allow_html=True)
+        if abs(difference) < 1e-9:
+            st.info("Both variants reached the same test accuracy on this synthetic split.")
+        elif difference > 0:
+            st.success("Model B scored higher on this synthetic split. This does not establish real-world superiority.")
+        else:
+            st.info("Model A scored higher on this synthetic split. Endocrine modulation changes update magnitude, not the information available.")
         comp_df = pd.DataFrame({
             "Variant": ["A · Ordinary Hebbian", "B · Endocrine-modulated"],
             "Test accuracy": [ab["plain_accuracy"], ab["endo_accuracy"]]
