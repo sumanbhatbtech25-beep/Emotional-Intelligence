@@ -591,6 +591,12 @@ else:
         img_file = st.camera_input("Capture visual input")
     with col2:
         audio_file = st.audio_input("Record a short audio clip")
+        if st.session_state.transcript:
+            st.markdown('<div style="margin-top:.55rem;padding:.65rem .8rem;border-radius:12px;background:#E8F7EF;border:1px solid #B9E4CB;color:#276749;font-weight:750;">✓ Speech transcribed · transcript ready</div>', unsafe_allow_html=True)
+        elif audio_file is not None:
+            st.markdown('<div style="margin-top:.55rem;padding:.65rem .8rem;border-radius:12px;background:#FFF0E5;border:1px solid #F3C5AD;color:#96552F;font-weight:750;">● Audio ready · extract to transcribe</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div style="margin-top:.55rem;padding:.65rem .8rem;border-radius:12px;background:#FCE7F0;border:1px solid #F0C6D6;color:#A92F65;font-weight:750;">◌ Waiting for your recording</div>', unsafe_allow_html=True)
     if st.button("Extract features from captured media"):
         if img_file is None or audio_file is None:
             st.warning("Capture both an image and an audio clip first.")
@@ -598,6 +604,7 @@ else:
             visual_cue, visual_uncertainty, vnotes = visual_features(img_file.getvalue())
             face_scores, face_notes = infer_facial_emotion(img_file.getvalue())
             audio_bytes = audio_file.getvalue()
+            st.session_state.transcript = ""
             audio_cue, anot = audio_features(audio_bytes)
             transcript, speech_notes = transcribe_audio(audio_bytes)
             st.session_state.transcript = transcript
@@ -681,17 +688,24 @@ else:
     if st.session_state.emotion_scores:
         emotion_scores = st.session_state.emotion_scores
         best_emotion = max(emotion_scores, key=emotion_scores.get)
-        best_score = emotion_scores[best_emotion]
-        st.markdown("#### Emotion estimate (separate from the response network)")
-        st.metric("Most likely cue", best_emotion.title(), f"{best_score:.0%} relative score")
-        emotion_df = pd.DataFrame({
-            "Emotion": list(emotion_scores.keys()),
-            "Score": list(emotion_scores.values())
-        }).set_index("Emotion")
-        st.bar_chart(emotion_df)
-        for note in st.session_state.emotion_notes:
-            st.write(f"- {note}")
-        st.caption("Scores are model/heuristic outputs, not calibrated probabilities or a diagnosis. Check whether the estimate matches how you actually feel.")
+        best_score = float(emotion_scores[best_emotion])
+        emotion_art = {"sadness":("☁️","#8E77B5"),"anger":("🔥","#D94F70"),"fear":("🌧️","#6C91B8"),"joy":("☀️","#E7A34E"),"surprise":("✨","#B17CC4"),"neutral":("🌸","#D96F9B")}
+        st.markdown("#### Your emotion snapshot")
+        emoji, accent = emotion_art.get(best_emotion,("💗","#D94F87"))
+        st.markdown(f"""<div style="display:flex;align-items:center;gap:1rem;padding:1rem 1.1rem;border-radius:20px;border:1px solid #F0C3D5;background:linear-gradient(110deg,#FCE1ED,#FFEBDD 72%,#FFFFFF);box-shadow:0 8px 22px rgba(169,47,101,.07);margin:.35rem 0 1rem;"><div style="font-size:2.3rem;">{emoji}</div><div style="flex:1;"><div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;font-weight:800;color:#A92F65;">Leading emotion cue</div><div style="font-size:1.55rem;font-weight:850;color:#432A38;">{best_emotion.title()}</div><div style="font-size:.88rem;color:#806A76;">Estimated from the available signals</div></div><div style="font-size:1.45rem;font-weight:850;color:{accent};">{best_score:.0%}</div></div>""", unsafe_allow_html=True)
+        st.markdown("**Emotion mix**")
+        top_emotions = sorted(emotion_scores.items(), key=lambda item: item[1], reverse=True)[:3]
+        emotion_cols = st.columns(len(top_emotions))
+        for emotion_col, (label, score) in zip(emotion_cols, top_emotions):
+            icon_emoji, icon_color = emotion_art.get(label,("💗","#D94F87"))
+            with emotion_col:
+                st.markdown(f"""<div style="height:100%;padding:.8rem;border-radius:16px;border:1px solid #F2D0DD;background:rgba(255,255,255,.78);text-align:center;"><div style="font-size:1.45rem;">{icon_emoji}</div><div style="font-weight:800;color:#432A38;margin:.25rem 0;">{label.title()}</div><div style="font-size:1.15rem;font-weight:850;color:{icon_color};">{float(score):.0%}</div></div>""", unsafe_allow_html=True)
+        st.markdown("**Relative signal strength**")
+        st.progress(max(0.0, min(1.0, best_score)))
+        st.caption("This is a relative model score, not a calibrated probability or diagnosis. Visible expressions and spoken words do not prove how someone feels.")
+        with st.expander("How this estimate was formed"):
+            for note in st.session_state.emotion_notes:
+                st.write(f"- {note}")
 
     st.write("**Extracted feature notes**")
     for note in st.session_state.last_notes:
