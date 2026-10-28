@@ -6,3 +6,4 @@ opencv-python-headless>=4.8
 scipy>=1.10
 transformers>=4.41,<5
 torch>=2.2,<3
+imageio-ffmpeg>=0.5.1
