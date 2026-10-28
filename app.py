@@ -6,7 +6,117 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 
+
 st.set_page_config(page_title="NEUROENDO", page_icon="🧠", layout="wide")
+
+# NEUROENDO pink + peach visual system
+st.markdown("""
+<style>
+:root {
+  --neo-pink: #D94F87;
+  --neo-pink-deep: #A92F65;
+  --neo-pink-soft: #FCE7F0;
+  --neo-peach: #FFF0E5;
+  --neo-peach-deep: #F5B99D;
+  --neo-ink: #432A38;
+  --neo-muted: #806A76;
+}
+.stApp {
+  background:
+    radial-gradient(ellipse at 8% 0%, rgba(255, 211, 226, .52), transparent 34%),
+    radial-gradient(ellipse at 96% 8%, rgba(255, 221, 194, .55), transparent 32%),
+    linear-gradient(180deg, #FFFAF8 0%, #FFF5F2 55%, #FFF9F7 100%);
+  color: var(--neo-ink);
+}
+[data-testid="stHeader"] { background: rgba(255, 250, 248, .78); }
+[data-testid="stToolbar"] { right: 1rem; }
+.block-container {
+  max-width: 1440px;
+  padding-top: 2rem;
+  padding-bottom: 3.5rem;
+}
+h1, h2, h3 {
+  color: var(--neo-ink) !important;
+  letter-spacing: -.025em;
+}
+h1 { font-weight: 800 !important; }
+h2, h3 { font-weight: 720 !important; }
+p, label, .stMarkdown, [data-testid="stCaptionContainer"] {
+  color: var(--neo-ink);
+}
+[data-testid="stCaptionContainer"] p { color: var(--neo-muted) !important; }
+[data-testid="stMetric"] {
+  background: linear-gradient(145deg, rgba(255,255,255,.94), rgba(252,231,240,.78));
+  border: 1px solid #F4C5D8;
+  padding: 1rem 1.1rem;
+  border-radius: 18px;
+  box-shadow: 0 7px 22px rgba(169, 47, 101, .07);
+}
+[data-testid="stMetricLabel"] { color: var(--neo-muted) !important; }
+[data-testid="stMetricValue"] { color: var(--neo-pink-deep) !important; }
+.stButton > button, .stFormSubmitButton > button {
+  border: 1px solid #D94F87;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #D94F87, #BE3D76);
+  color: white;
+  font-weight: 700;
+  padding: .55rem 1.05rem;
+  transition: transform .15s ease, box-shadow .15s ease, filter .15s ease;
+  box-shadow: 0 5px 14px rgba(217, 79, 135, .18);
+}
+.stButton > button:hover, .stFormSubmitButton > button:hover {
+  color: white;
+  border-color: #A92F65;
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(217, 79, 135, .25);
+}
+.stButton > button:focus, .stFormSubmitButton > button:focus {
+  outline: 3px solid rgba(217, 79, 135, .22);
+  outline-offset: 2px;
+}
+div[data-baseweb="input"] > div,
+div[data-baseweb="textarea"] > div,
+div[data-baseweb="select"] > div {
+  background: rgba(255,255,255,.9);
+  border-color: #EAC5D3;
+  border-radius: 12px;
+}
+div[data-baseweb="input"] > div:focus-within,
+div[data-baseweb="textarea"] > div:focus-within,
+div[data-baseweb="select"] > div:focus-within {
+  border-color: var(--neo-pink);
+  box-shadow: 0 0 0 1px var(--neo-pink);
+}
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #FCE7F0 0%, #FFF0E5 100%);
+  border-right: 1px solid #F3C7D8;
+}
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 { color: var(--neo-pink-deep) !important; }
+[data-testid="stExpander"] {
+  border: 1px solid #F0C6D6;
+  border-radius: 15px;
+  background: rgba(255,255,255,.58);
+  overflow: hidden;
+}
+[data-testid="stAlert"] { border-radius: 14px; }
+hr { border-color: #F2D2DE !important; }
+[data-testid="stDataFrame"], [data-testid="stTable"] {
+  border: 1px solid #F0C6D6;
+  border-radius: 14px;
+  overflow: hidden;
+}
+[data-testid="stProgress"] > div > div {
+  background: linear-gradient(90deg, #E46A9B, #F2B08F);
+}
+@media (max-width: 700px) {
+  .block-container { padding: 1rem .8rem 2rem; }
+  h1 { font-size: 1.9rem !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # Optional shared-password gate. Configure APP_PASSWORD in Streamlit secrets.
 # This is a simple access gate, not individual user accounts or OAuth.
@@ -395,8 +505,20 @@ def update_endocrine(reward, stress, feedback_reward, feedback_stress):
 
 init_state()
 
-st.title("🧠 NEUROENDO")
-st.caption("A non-quantum, biologically inspired multimodal learning demonstrator")
+st.markdown("""
+<div style="padding: 1.5rem 1.7rem; margin: .2rem 0 1.25rem; border-radius: 24px;
+background: linear-gradient(115deg, #FCE1ED 0%, #FFEBDD 58%, #FFF7F3 100%);
+border: 1px solid #F3C2D6; box-shadow: 0 10px 28px rgba(169,47,101,.08);">
+  <div style="font-size:.78rem; font-weight:800; letter-spacing:.16em; text-transform:uppercase;
+  color:#A92F65; margin-bottom:.45rem;">Emotion • Learning • Adaptation</div>
+  <div style="font-size:2.35rem; line-height:1.12; font-weight:850; color:#432A38;">
+    🧠 NEUROENDO
+  </div>
+  <div style="font-size:1rem; margin-top:.65rem; color:#806A76;">
+    A biologically inspired, non-quantum multimodal learning demonstrator
+  </div>
+</div>
+""", unsafe_allow_html=True)
 st.markdown(
     "Camera and microphone cues feed a small Hebbian association network. "
     "A simulated artificial endocrine system modulates how strongly the network learns."
