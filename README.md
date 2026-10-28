@@ -13,20 +13,20 @@
 
 ## 🌸 What it does
 
-NEUROENDO combines visual cues, spoken language, simple audio features, a small **Hebbian association network**, and a simulated artificial endocrine controller. Explore inputs, see a response, provide feedback, and inspect how the model's weights change.
+NEUROENDO combines sampled video frames, spoken language, simple audio features, a small **Hebbian association network**, and a simulated artificial endocrine controller. Explore inputs, see a response, provide feedback, and inspect how the model's weights change.
 
 | Workspace | Explore |
 |---|---|
-| **♡ Emotion Studio** | Demo inputs or camera/audio capture, emotion cues, and feedback-based learning |
+| **♡ Emotion Studio** | Demo inputs or video upload with frame/audio analysis, emotion cues, and feedback-based learning |
 | **✧ Model Insights** | Learned weights, network visualization, and reward/stress history |
 | **⇄ A/B Experiment** | Compare standard and endocrine-modulated Hebbian updates on synthetic data |
 
 ## 🧩 How it works
 
 ```text
-Camera + microphone / demo inputs
+Uploaded video / demo inputs
               ↓
- Visual cues · Speech-to-text · Audio features
+ Sampled frames · Speech-to-text · Audio features
               ↓
        Feature vector x
               ↓
@@ -86,7 +86,7 @@ This is a shared-password gate, not individual accounts or OAuth. Never commit y
 
 ## 🛡️ Important limitations
 
-- Camera input is a **still image** and microphone input is a **recorded clip**—not continuous, always-on streaming.
+- Video input is an uploaded clip. The app samples up to five frames and extracts its audio track; this is not continuous live tracking.
 - Emotion estimates are uncertain cues, not diagnoses or proof of someone's internal feelings.
 - Audio energy/texture is only a rough proxy; facial-expression cues can be unreliable.
 - The app integrates pretrained models and fallback heuristics; it is not a custom fine-tuned emotion model.
