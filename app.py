@@ -532,7 +532,7 @@ def update_endocrine(reward, stress, feedback_reward, feedback_stress):
 init_state()
 
 st.markdown("""
-<div style="padding: 1.5rem 1.7rem; margin: .2rem 0 1.25rem; border-radius: 24px;
+<div class="neo-hero" style="position:relative; overflow:hidden; padding: 1.65rem 1.8rem; margin: .2rem 0 1.25rem; border-radius: 24px;
 background: linear-gradient(115deg, #FCE1ED 0%, #FFEBDD 58%, #FFF7F3 100%);
 border: 1px solid #F3C2D6; box-shadow: 0 10px 28px rgba(169,47,101,.08);">
   <div style="font-size:.78rem; font-weight:800; letter-spacing:.16em; text-transform:uppercase;
@@ -543,6 +543,7 @@ border: 1px solid #F3C2D6; box-shadow: 0 10px 28px rgba(169,47,101,.08);">
   <div style="font-size:1rem; margin-top:.65rem; color:#806A76;">
     A biologically inspired, non-quantum multimodal learning demonstrator
   </div>
+  <div style="margin-top:.8rem;"><span class="neo-pill">✦ MULTIMODAL AI</span><span class="neo-pill">♡ EMOTION CUES</span><span class="neo-pill">↗ ADAPTIVE LEARNING</span></div>
 </div>
 """, unsafe_allow_html=True)
 st.markdown(
@@ -650,7 +651,7 @@ with st.expander("System architecture", expanded=False):
     """)
     st.caption("All processing is classical and non-quantum. D and S are simulated controller states, not measured hormones.")
 
-st.subheader("Learning and response")
+st.markdown('<div class="neo-section"><span class="neo-number">01</span><span class="neo-heading">Learning &amp; response</span><span class="neo-kicker">Live interaction</span></div>', unsafe_allow_html=True)
 
 if current is None:
     st.info("Select Demo mode or capture both an image and audio clip, then extract features.")
@@ -734,7 +735,7 @@ else:
         st.rerun()
 
 st.divider()
-st.subheader("Inspect the model")
+st.markdown('<div class="neo-section"><span class="neo-number">02</span><span class="neo-heading">Inside the model</span><span class="neo-kicker">Weights &amp; history</span></div>', unsafe_allow_html=True)
 
 w_df = pd.DataFrame(st.session_state.W, index=FEATURES, columns=RESPONSES)
 st.markdown("**Hebbian weight matrix** — rows are input features, columns are response neurons.")
@@ -776,7 +777,7 @@ These are intentionally simple engineering choices for a prototype. The camera f
 """)
 
 st.divider()
-st.subheader("A/B experiment: ordinary vs endocrine-modulated Hebbian learning")
+st.markdown('<div class="neo-section"><span class="neo-number">03</span><span class="neo-heading">A/B learning experiment</span><span class="neo-kicker">Compare variants</span></div>', unsafe_allow_html=True)
 st.write(
     "Both variants receive the same reproducible synthetic inputs, labels, training/test split, "
     "and base learning rate. Variant A uses ordinary Hebbian updates; Variant B multiplies each "
