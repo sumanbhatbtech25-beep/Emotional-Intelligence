@@ -61,46 +61,97 @@ def classify_text_fallback(text):
              for label in EMOTION_LABELS if evidence[label]]
     return scores, notes
 
-def transcribe_audio(audio_bytes):
-    """Transcribe a recorded WAV clip using a pretrained speech-recognition model."""
+WHISPER_SR = 16000
+
+
+def _whisper_model_name():
+    """Whisper checkpoint. base.en is a good accuracy/speed balance on CPU; override with
+    the WHISPER_MODEL secret or environment variable (e.g. openai/whisper-small.en)."""
+    import os
     try:
-        from scipy.io import wavfile
+        name = st.secrets.get("WHISPER_MODEL", "")
+    except Exception:
+        name = ""
+    return name or os.environ.get("WHISPER_MODEL", "openai/whisper-base.en")
+
+
+def prepare_speech(audio_bytes):
+    """Decode a WAV clip into clean 16 kHz mono float32 for Whisper.
+
+    Steps: mono downmix, scale to [-1, 1], remove DC offset / low hum (80 Hz
+    high-pass), resample to 16 kHz, trim leading/trailing silence, and
+    normalise loudness so quiet microphones are still heard.
+    Returns (samples, sample_rate, seconds_of_speech).
+    """
+    from scipy.io import wavfile
+    from scipy.signal import butter, resample_poly, sosfiltfilt
+
+    sr, data = wavfile.read(io.BytesIO(audio_bytes))
+    if data.size == 0:
+        return np.zeros(0, dtype=np.float32), WHISPER_SR, 0.0
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    if np.issubdtype(data.dtype, np.integer):
+        data = data.astype(np.float32) / float(np.iinfo(data.dtype).max)
+    else:
+        data = data.astype(np.float32)
+    data = data - float(np.mean(data))
+    if len(data) > sr // 10:
+        sos = butter(4, 80, btype="highpass", fs=sr, output="sos")
+        data = sosfiltfilt(sos, data).astype(np.float32)
+    if sr != WHISPER_SR:
+        from math import gcd
+        g = gcd(int(sr), WHISPER_SR)
+        data = resample_poly(data, WHISPER_SR // g, int(sr) // g).astype(np.float32)
+    # Trim silence using 30 ms frame energy relative to the loudest part.
+    frame = int(0.03 * WHISPER_SR)
+    if len(data) > frame * 3:
+        n = len(data) // frame
+        energy = np.sqrt(np.mean(data[: n * frame].reshape(n, frame) ** 2, axis=1))
+        voiced = np.where(energy > max(0.015 * energy.max(), 1e-4))[0]
+        if voiced.size:
+            start = max(0, (voiced[0] - 10) * frame)       # keep ~0.3 s padding
+            end = min(len(data), (voiced[-1] + 11) * frame)
+            data = data[start:end]
+    peak = float(np.max(np.abs(data))) if data.size else 0.0
+    if peak > 1e-4:
+        data = 0.9 * data / peak
+    return data.astype(np.float32), WHISPER_SR, len(data) / WHISPER_SR
+
+
+def transcribe_audio(audio_bytes):
+    """Transcribe a recorded WAV clip with Whisper after cleaning it up."""
+    try:
         from transformers import pipeline
 
-        if "speech_recognition_pipeline" not in st.session_state:
-            with st.spinner("Loading speech-to-text model for first use..."):
-                st.session_state.speech_recognition_pipeline = pipeline(
-                    "automatic-speech-recognition",
-                    model="openai/whisper-tiny.en"
-                )
+        speech, sr, seconds = prepare_speech(audio_bytes)
+        if seconds < 0.3 or float(np.max(np.abs(speech), initial=0.0)) < 1e-3:
+            return "", ["The recording was silent or too short to transcribe."]
 
-        sr, data = wavfile.read(io.BytesIO(audio_bytes))
-        if data.size == 0:
-            return "", ["The recorded audio was empty."]
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        if np.issubdtype(data.dtype, np.integer):
-            info = np.iinfo(data.dtype)
-            scale = float(max(abs(info.min), abs(info.max)))
-            data = data.astype(np.float32) / scale
-        else:
-            data = data.astype(np.float32)
-            peak = float(np.max(np.abs(data))) if data.size else 0.0
-            if peak > 1.0:
-                data = data / peak
+        model_name = _whisper_model_name()
+        if st.session_state.get("speech_model_name") != model_name:
+            with st.spinner("Loading the speech-recognition model (first time only)…"):
+                st.session_state.speech_recognition_pipeline = pipeline(
+                    "automatic-speech-recognition", model=model_name
+                )
+                st.session_state.speech_model_name = model_name
 
         result = st.session_state.speech_recognition_pipeline(
-            {"raw": data, "sampling_rate": int(sr)}, chunk_length_s=20
+            {"raw": speech, "sampling_rate": sr},
+            chunk_length_s=30,
+            generate_kwargs={"num_beams": 3},
         )
-        transcript = str(result.get("text", "")).strip()
-        if transcript:
-            return transcript, ["Speech was transcribed automatically with Whisper Tiny English."]
-        return "", ["Speech-to-text returned an empty transcript; emotion-from-words was skipped."]
+        transcript = " ".join(str(result.get("text", "")).split())
+        # Whisper sometimes "hears" stock phrases in near-silence.
+        if transcript.lower().strip(" .!") in {"", "you", "thank you", "thanks for watching", "bye"}:
+            return "", ["No clear speech was detected in the recording."]
+        return transcript, [f"Speech transcribed with {model_name.split('/')[-1]} ({seconds:.1f}s of audio after cleanup)."]
     except Exception as exc:
         return "", [
             "Automatic speech transcription is unavailable, so spoken-word emotion analysis was skipped.",
-            f"Speech-to-text error: {type(exc).__name__}. Check model download, memory, and audio format."
+            f"Speech-to-text error: {type(exc).__name__}: {exc}"[:200],
         ]
+
 
 def infer_text_emotion(text):
     """Use a pretrained text model when available; fall back to transparent keyword cues."""
@@ -191,7 +242,7 @@ def combine_emotion_scores(text_scores=None, face_scores=None, audio_arousal=Non
     if face_scores:
         for label, score in face_scores.items():
             combined[label] += 0.35 * float(score)
-    if audio_arousal is not None:
+    if audio_arousal is not None and (text_scores or face_scores):
         # Audio energy is only a weak arousal cue; it cannot identify emotion by itself.
         combined["fear"] += 0.025 * float(audio_arousal)
         combined["anger"] += 0.025 * float(audio_arousal)

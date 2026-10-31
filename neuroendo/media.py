@@ -42,24 +42,21 @@ class LiveCaptureBuffer:
                     self.frames.append(encoded.tobytes())
 
     def add_audio(self, frame):
-        data = frame.to_ndarray()
-        if data.size == 0:
+        mono = audio_frame_to_mono(frame)
+        if mono.size == 0:
             return
-        if data.ndim == 2:
-            data = data.mean(axis=0)
-        data = np.asarray(data).reshape(-1)
         with self.lock:
             self.sample_rate = int(frame.sample_rate or self.sample_rate)
             remaining = max(0, int(self.sample_rate * 30) - self.audio_samples)
             if remaining <= 0:
                 return
-            data = data[:remaining]
-            if np.issubdtype(data.dtype, np.integer):
-                data = np.clip(data, -32768, 32767).astype(np.int16)
-            else:
-                data = (np.clip(data, -1.0, 1.0) * 32767).astype(np.int16)
-            self.audio_chunks.append(data.copy())
+            data = (np.clip(mono[:remaining], -1.0, 1.0) * 32767).astype(np.int16)
+            self.audio_chunks.append(data)
             self.audio_samples += len(data)
+
+    def has_audio(self):
+        with self.lock:
+            return self.audio_samples > 0
 
     def snapshot(self):
         with self.lock:
@@ -84,13 +81,40 @@ class WebcamVideoProcessor:
         return frame
 
 
+def audio_frame_to_mono(frame):
+    """Convert a WebRTC audio frame to mono float32 in [-1, 1].
+
+    Browsers usually send packed (interleaved) stereo s16: to_ndarray() returns
+    shape (1, samples*channels) as L R L R ... It must be de-interleaved before
+    averaging, otherwise the clip is twice as long and scrambled. Planar formats
+    return (channels, samples) instead.
+    """
+    raw = frame.to_ndarray()
+    if raw.size == 0:
+        return np.zeros(0, dtype=np.float32)
+    channels = max(1, len(frame.layout.channels))
+    if frame.format.is_planar:
+        data = raw.reshape(channels, -1).astype(np.float32).mean(axis=0)
+    else:
+        data = raw.reshape(-1, channels).astype(np.float32).mean(axis=1)
+    if np.issubdtype(raw.dtype, np.integer):
+        data /= float(np.iinfo(raw.dtype).max)
+    return data
+
+
 class MicrophoneAudioProcessor:
     def __init__(self, buffer):
         self.buffer = buffer
 
     def recv(self, frame):
         self.buffer.add_audio(frame)
-        return frame
+        # Send silence back so the browser doesn't play the user's own voice (echo).
+        import av
+        silent = av.AudioFrame.from_ndarray(np.zeros_like(frame.to_ndarray()),
+                                            format=frame.format.name, layout=frame.layout.name)
+        silent.sample_rate = frame.sample_rate
+        silent.pts, silent.time_base = frame.pts, frame.time_base
+        return silent
 
 
 def extract_video_frames(video_bytes, max_frames=5):

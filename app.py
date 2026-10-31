@@ -13,7 +13,7 @@ from neuroendo.emotion import (
 from neuroendo.media import LiveCaptureBuffer, WebcamVideoProcessor, MicrophoneAudioProcessor, extract_video_frames, extract_video_audio, webrtc_streamer, WebRtcMode, RTCConfiguration
 
 
-st.set_page_config(page_title="NEUROENDO", page_icon="🧠", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="NEUROENDO", page_icon="🧠", layout="wide", initial_sidebar_state="auto")
 
 # NEUROENDO pink + peach visual system
 st.markdown("""
@@ -260,8 +260,6 @@ def require_app_password():
 
     if not configured_password:
         # Gate is optional: with no APP_PASSWORD secret the app is open.
-        with st.sidebar:
-            st.caption("🔓 Open access. Set APP_PASSWORD in Streamlit secrets to require a shared password.")
         return
 
     if st.session_state.get("authenticated", False):
@@ -321,30 +319,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-PAGES = [("Chat", "💬", "Talk with NEUROENDO"),
-         ("Model Insights", "✧", "How the model is learning"),
-         ("A/B Experiment", "⇄", "Endocrine vs plain learning")]
-if st.session_state.get("active_page") not in [p[0] for p in PAGES]:
-    st.session_state.active_page = "Chat"
-
 EMOTION_ART = {"sadness": "☁️", "anger": "🔥", "fear": "🌧️", "joy": "☀️", "surprise": "✨", "neutral": "🌸"}
 STYLE_LABELS = {"Supportive": "Supportive 💗", "De-escalating": "Understanding 🤝", "Calming": "Calming 🌿",
                 "Upbeat": "Cheerful 🎉", "Curious": "Curious 🤔", "Neutral": "Just listen 🌸"}
-
-with st.sidebar:
-    st.markdown("""
-    <div class="neo-brand">
-      <div class="neo-brand-mark">🧠</div>
-      <div><div class="neo-brand-name">NEUROENDO</div><div class="neo-brand-sub">Emotion · Learning · Adaptation</div></div>
-    </div>
-    """, unsafe_allow_html=True)
-    for page_name, page_icon, page_help in PAGES:
-        selected = st.session_state.active_page == page_name
-        if st.button(f"{page_icon}   {page_name}", key="nav_" + page_name, use_container_width=True,
-                     type="primary" if selected else "secondary", help=page_help):
-            st.session_state.active_page = page_name
-            st.rerun()
-    st.caption("Model Insights and A/B Experiment show what's happening under the hood.")
 
 
 def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, typed=False):
@@ -406,7 +383,23 @@ def learn_from(message, target, accepted):
     })
 
 
-if st.session_state.active_page == "Chat":
+
+# ---- Top-right view switch: Chat (default) or the full Emotional Learning site ----
+if st.session_state.get("view") not in ("Chat", "Emotional Learning"):
+    st.session_state.view = "Chat"
+_spacer, _nav_chat, _nav_learn = st.columns([5.2, 1.0, 1.7])
+with _nav_chat:
+    if st.button("💬 Chat", key="view_chat", use_container_width=True,
+                 type="primary" if st.session_state.view == "Chat" else "secondary"):
+        st.session_state.view = "Chat"
+        st.rerun()
+with _nav_learn:
+    if st.button("🧠 Emotional Learning", key="view_learning", use_container_width=True,
+                 type="primary" if st.session_state.view == "Emotional Learning" else "secondary"):
+        st.session_state.view = "Emotional Learning"
+        st.rerun()
+
+if st.session_state.view == "Chat":
     top_left, top_right = st.columns([5, 1])
     with top_left:
         st.markdown("""
@@ -441,25 +434,24 @@ if st.session_state.active_page == "Chat":
         )
         captured_frames, captured_audio = capture_buffer.snapshot()
         recording = bool(webrtc_ctx.state.playing)
+        # Auto-analyse the moment recording stops (playing -> stopped).
+        just_stopped = st.session_state.get("was_recording", False) and not recording
+        st.session_state.was_recording = recording
+        has_capture = bool(captured_frames or captured_audio)
         if recording:
-            st.markdown('<div class="neo-video-hint">🔴 Listening… press <b>STOP</b> when you\'re done talking.</div>', unsafe_allow_html=True)
-        elif captured_frames:
-            st.markdown('<div class="neo-video-hint">✅ Got it! Press <b>Send</b> so I can reply.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="neo-video-hint">🔴 Listening… press <b>STOP</b> when you\'re done — I\'ll reply right away.</div>', unsafe_allow_html=True)
         else:
             st.markdown('<div class="neo-howto"><span>1 · Press START</span><span>2 · Talk to me</span>'
-                        '<span>3 · Press STOP</span><span>4 · Send</span></div>', unsafe_allow_html=True)
-        send_col, clear_col = st.columns([3, 1])
-        with send_col:
-            send_clicked = st.button("💬 Send what I said", type="primary", use_container_width=True,
-                                     disabled=recording or not captured_frames)
-        with clear_col:
-            if st.button("Retake", use_container_width=True, type="secondary", disabled=not captured_frames):
-                capture_buffer.clear()
-                st.rerun()
+                        '<span>3 · Press STOP — I\'ll reply</span></div>', unsafe_allow_html=True)
+        # Fallback only if a recording is waiting but wasn't picked up automatically.
+        send_clicked = False
+        if has_capture and not recording and not just_stopped:
+            send_clicked = st.button("💬 Reply to my recording", type="primary", use_container_width=True)
+        send_clicked = send_clicked or (just_stopped and has_capture)
         st.caption("Camera and mic stay in this session only. Record only yourself or people who agreed.")
 
         if send_clicked:
-            with st.spinner("Listening to what you said…"):
+            with st.spinner("Listening to what you said… 🎧"):
                 visual_results = [visual_features(frame) for frame in captured_frames]
                 face_detected = any(result[1] < 1.0 for result in visual_results)
                 face_score_sets, notes = [], list(dict.fromkeys(n for r in visual_results for n in r[2]))
@@ -503,7 +495,7 @@ if st.session_state.active_page == "Chat":
 
         last = st.session_state.messages[-1] if st.session_state.messages else None
         if last and last["role"] == "assistant" and not last["rated"]:
-            fb1, fb2, _ = st.columns([1.1, 1.6, 2])
+            fb1, fb2, _ = st.columns([1.5, 1.9, 1.1])
             with fb1:
                 if st.button("👍 Nice reply", key=f"accept_{len(st.session_state.messages)}",
                              use_container_width=True, type="secondary"):
@@ -534,12 +526,330 @@ if st.session_state.active_page == "Chat":
                 respond(typed.strip(), text_scores, None, 0.4, False, text_notes, typed=True)
             st.rerun()
 
+    st.stop()  # Chat view ends here; the Emotional Learning site follows.
 
-if st.session_state.active_page != "Chat":
-    st.markdown(
-        f'<div class="neo-page-meta"><span class="neo-live-dot"></span>Under the hood / <strong style="color:#A92F65;">{st.session_state.active_page}</strong></div>',
-        unsafe_allow_html=True,
-    )
+
+# ======================= Emotional Learning: the full original site =======================
+if st.session_state.get("active_page") not in ("Emotion Studio", "Model Insights", "A/B Experiment"):
+    st.session_state.active_page = "Emotion Studio"
+
+st.markdown("""
+<div class="neo-hero" style="position:relative; overflow:hidden; padding: 1.65rem 1.8rem; margin: .2rem 0 1.25rem; border-radius: 24px;
+background: linear-gradient(115deg, #FCE1ED 0%, #FFEBDD 58%, #FFF7F3 100%);
+border: 1px solid #F3C2D6; box-shadow: 0 10px 28px rgba(169,47,101,.08);">
+  <div style="font-size:.78rem; font-weight:800; letter-spacing:.16em; text-transform:uppercase;
+  color:#A92F65; margin-bottom:.45rem;">Emotion • Learning • Adaptation</div>
+  <div style="font-size:2.35rem; line-height:1.12; font-weight:850; color:#432A38;">
+    🧠 NEUROENDO
+  </div>
+  <div style="font-size:1rem; margin-top:.65rem; color:#806A76;">
+    A biologically inspired, non-quantum multimodal learning demonstrator
+  </div>
+  <div style="margin-top:.8rem;"><span class="neo-pill">✦ MULTIMODAL AI</span><span class="neo-pill">♡ EMOTION CUES</span><span class="neo-pill">↗ ADAPTIVE LEARNING</span></div>
+</div>
+""", unsafe_allow_html=True)
+st.markdown(
+    "Your face, voice and words are turned into emotion scores. Those scores drive a small Hebbian "
+    "network that picks how to reply, and a simulated endocrine system — reacting to your emotion and "
+    "to whether its replies land — shapes both the reply and how fast the network learns."
+)
+
+
+# Premium sidebar navigation and persistent endocrine controls.
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "Emotion Studio"
+
+with st.sidebar:
+    st.markdown("""
+    <div class="neo-brand">
+      <div class="neo-brand-mark">🧠</div>
+      <div><div class="neo-brand-name">NEUROENDO</div><div class="neo-brand-sub">Emotion · Learning · Adaptation</div></div>
+    </div>
+    <div class="neo-sidebar-label">Workspace</div>
+    """, unsafe_allow_html=True)
+    pages = [
+        ("Emotion Studio", "♡", "Capture & learn"),
+        ("Model Insights", "⌘", "Weights & history"),
+        ("A/B Experiment", "⇄", "Compare learning"),
+    ]
+    for page_name, page_icon, page_label in pages:
+        selected = st.session_state.active_page == page_name
+        if st.button(
+            f"{page_icon}   {page_name}  {'✓' if selected else ''}",
+            key="nav_" + page_name,
+            use_container_width=True,
+            type="primary" if selected else "secondary",
+            help=page_label,
+        ):
+            st.session_state.active_page = page_name
+            st.rerun()
+    st.caption("Choose a workspace to keep each task focused.")
+    st.divider()
+    st.markdown('<div class="neo-sidebar-label">Artificial endocrine controller</div>', unsafe_allow_html=True)
+    st.write("Simulated regulatory variables, updated automatically from your detected emotion and your feedback. Not measured hormones.")
+    endo_c1, endo_c2 = st.columns(2)
+    endo_c1.metric("Reward D", f"{st.session_state.reward:.2f}")
+    endo_c2.metric("Stress S", f"{st.session_state.stress:.2f}")
+    mod = endocrine_modulation(st.session_state.reward, st.session_state.stress)
+    st.metric("Plasticity g(H)", f"{mod:.2f}×")
+    st.caption("g(H) = clip(1 + 2S − D, 0.2, 2.0): stress speeds re-learning, sustained reward consolidates.")
+    if st.button("Reset network, hormones and history", use_container_width=True):
+        reset_state()
+        st.rerun()
+
+st.markdown(
+    f'<div class="neo-page-meta"><span class="neo-live-dot"></span>Workspace / <strong style="color:#A92F65;">{st.session_state.active_page}</strong></div>',
+    unsafe_allow_html=True,
+)
+
+
+if st.session_state.active_page == "Emotion Studio":
+    mode = st.radio("Input mode", ["Type a message", "Record with camera + mic"], horizontal=True)
+
+    if mode == "Type a message":
+        st.caption("Type how you're feeling. The text goes through the same emotion model used for transcribed speech.")
+        typed_text = st.text_area("Your message", "I got scolded at work today and I feel awful.", height=80)
+        typed_arousal = st.slider("How intense / energetic does this feel?", 0.0, 1.0, 0.4, 0.05,
+                                  help="Stands in for the acoustic arousal cue that a voice recording would provide.")
+        if st.button("Analyze message", type="primary"):
+            with st.spinner("Reading the emotion in your message…"):
+                text_scores, text_notes = infer_text_emotion(typed_text)
+            text_scores, _event = apply_event_hint(text_scores, typed_text)
+            combined = combine_emotion_scores(text_scores=text_scores, audio_arousal=typed_arousal)
+            uncertainty = estimate_uncertainty(text_scores=text_scores, combined=combined, face_detected=False)
+            uncertainty = max(0.0, uncertainty - 0.2)  # typed input: no face expected, don't penalise it
+            st.session_state.emotion_scores = combined
+            st.session_state.emotion_notes = text_notes
+            st.session_state.transcript = typed_text.strip()
+            st.session_state.last_features = {"emotion_scores": combined, "arousal": typed_arousal, "uncertainty": uncertainty}
+            st.session_state.last_notes = [f"Typed message with intensity {typed_arousal:.2f}."]
+            st.session_state.feedback_done = False
+            st.session_state.reply_variant += 1
+            st.rerun()
+
+    if mode == "Record with camera + mic":
+        st.markdown("""
+        <div class="neo-studio">
+          <div style="font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;font-weight:850;color:#A92F65;">Live recording studio</div>
+          <div style="font-size:1.22rem;font-weight:850;color:#432A38;margin:.25rem 0;">Record your face + voice ✨</div>
+          <div style="color:#806A76;font-size:.88rem;">Allow camera and microphone access, press START, speak naturally, then press STOP. NEUROENDO samples your video frames and analyzes the recorded microphone audio.</div>
+          <span class="neo-step active">01 · Record</span><span class="neo-step">02 · Stop</span><span class="neo-step">03 · Analyze & learn</span>
+        </div>
+        """, unsafe_allow_html=True)
+        if "live_capture_buffer" not in st.session_state:
+            st.session_state.live_capture_buffer = LiveCaptureBuffer()
+        capture_buffer = st.session_state.live_capture_buffer
+        webrtc_ctx = webrtc_streamer(
+            key="neuroendo-studio-recorder",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}),
+            media_stream_constraints={
+                "video": {"width": {"ideal": 480, "max": 640}, "height": {"ideal": 360, "max": 480}, "frameRate": {"ideal": 10, "max": 12}},
+                "audio": {"echoCancellation": True, "noiseSuppression": True, "autoGainControl": True},
+            },
+            video_processor_factory=lambda: WebcamVideoProcessor(capture_buffer),
+            audio_processor_factory=lambda: MicrophoneAudioProcessor(capture_buffer),
+            async_processing=True,
+        )
+        st.caption("Analysis starts automatically when you press STOP. Low-bandwidth recording mode: up to 480 px wide at 10–12 FPS. Audio capture is capped at 30 seconds; about one frame per second is sampled for expression cues.")
+        if webrtc_ctx.state.playing:
+            st.info("Recording is active. Speak clearly, then press STOP in the recorder above.")
+        captured_frames, captured_audio = capture_buffer.snapshot()
+        st.caption(f"Captured so far: {len(captured_frames)} sampled frames · {'audio ready' if captured_audio else 'waiting for microphone audio'}")
+        action_col1, action_col2 = st.columns(2)
+        with action_col1:
+            analyze_recording = st.button("Analyze recorded inputs", type="primary", disabled=webrtc_ctx.state.playing)
+        # Start analysis automatically as soon as recording stops.
+        studio_recording = bool(webrtc_ctx.state.playing)
+        if st.session_state.get("studio_was_recording", False) and not studio_recording and captured_frames:
+            analyze_recording = True
+        st.session_state.studio_was_recording = studio_recording
+        with action_col2:
+            clear_recording = st.button("Clear recording")
+        if clear_recording:
+            capture_buffer.clear()
+            st.session_state.last_features = None
+            st.session_state.emotion_scores = None
+            st.session_state.transcript = ""
+            st.rerun()
+        if analyze_recording:
+            captured_frames, captured_audio = capture_buffer.snapshot()
+            if not captured_frames:
+                st.warning("No video frames were captured. Start recording, allow camera access, record for a few seconds, and stop.")
+            else:
+                with st.spinner("Analyzing recorded face and microphone inputs…"):
+                    visual_results = [visual_features(frame) for frame in captured_frames]
+                    face_detected = any(result[1] < 1.0 for result in visual_results)
+                    vnotes = list(dict.fromkeys(note for result in visual_results for note in result[2]))
+                    face_score_sets, face_notes = [], []
+                    for frame in captured_frames:
+                        frame_scores, frame_note = infer_facial_emotion(frame)
+                        if frame_scores:
+                            face_score_sets.append(frame_scores)
+                        face_notes.extend(frame_note)
+                    face_scores = average_emotion_scores(face_score_sets)
+                    audio_cue, anot, speech_notes, text_notes = 0.0, [], [], []
+                    text_scores = None
+                    st.session_state.transcript = ""
+                    if captured_audio:
+                        audio_cue, anot = audio_features(captured_audio)
+                        transcript, speech_notes = transcribe_audio(captured_audio)
+                        st.session_state.transcript = transcript
+                        text_scores, text_notes = infer_text_emotion(transcript) if transcript else (None, [])
+                        if transcript:
+                            text_scores, _event = apply_event_hint(text_scores, transcript)
+                    else:
+                        text_notes = ["No microphone audio was captured; speech and acoustic analysis were skipped."]
+                    combined = combine_emotion_scores(text_scores=text_scores, face_scores=face_scores, audio_arousal=audio_cue)
+                    uncertainty = estimate_uncertainty(text_scores=text_scores, face_scores=face_scores,
+                                                       combined=combined, face_detected=face_detected)
+                    st.session_state.emotion_scores = combined
+                    st.session_state.emotion_notes = speech_notes + text_notes + list(dict.fromkeys(face_notes)) + anot
+                    st.session_state.emotion_source = "recorded webcam frames + microphone audio"
+                    st.session_state.last_features = {"emotion_scores": combined, "arousal": audio_cue, "uncertainty": uncertainty}
+                    st.session_state.last_notes = vnotes + anot
+                    st.session_state.feedback_done = False
+                    st.session_state.reply_variant += 1
+                    st.success("Recording analyzed. Review the detected cues and transcript below.")
+                    st.rerun()
+
+
+    current = st.session_state.last_features
+
+    st.divider()
+    with st.expander("System architecture", expanded=False):
+        st.markdown("""
+        ```text
+        Webcam frames + microphone audio   (or a typed message)
+                 |                |
+          face-expression    Whisper speech-to-text -> text-emotion model
+              model                     |
+                 |                acoustic arousal
+                 v                      v
+          Fused emotion scores (sadness, anger, fear, joy, surprise, neutral)
+                 + arousal + uncertainty  =  feature vector x  (8 values)
+                                 |
+                                 v
+          Hebbian network  x @ W  + stress bias  -->  reply strategy + reply text
+                 ^                                         |
+                 |  dW = eta * g(H) * x (y - p)^T          v
+                 +---------------  your feedback (accept / correct)
+                                 |
+          Artificial endocrine system:
+            Reward D  <- accepted replies, positive emotion
+            Stress S  <- corrected replies, negative / high-arousal emotion
+            g(H) = clip(1 + 2S - D)  sets plasticity;  S biases toward careful replies
+        ```
+        """)
+        st.caption("All processing is classical and non-quantum. D and S are simulated controller states, not measured hormones.")
+
+    st.markdown('<div class="neo-section"><span class="neo-number">01</span><span class="neo-heading">Learning &amp; response</span><span class="neo-kicker">Live interaction</span></div>', unsafe_allow_html=True)
+
+    if current is None:
+        st.info("Type a message and click **Analyze message**, or record with your camera and microphone.")
+    else:
+        x = build_features(current["emotion_scores"], current["arousal"], current["uncertainty"])
+        scores, probs, pred_idx = predict(x, st.session_state.W, S=st.session_state.stress)
+        pred = RESPONSES[pred_idx]
+        st.session_state.last_x = x
+        st.session_state.last_pred = pred
+        st.session_state.last_probs = probs
+
+        a, b, c = st.columns(3)
+        top_emotion = max(current["emotion_scores"], key=current["emotion_scores"].get)
+        a.metric("Leading emotion", top_emotion.title())
+        b.metric("Arousal cue", f'{current["arousal"]:.2f}')
+        c.metric("Uncertainty", f'{current["uncertainty"]:.2f}')
+
+        if st.session_state.transcript:
+            st.markdown("#### What you said")
+            st.write(st.session_state.transcript)
+            st.caption("Check the transcript for speech-recognition mistakes; errors can affect the emotion estimate.")
+
+        if st.session_state.emotion_scores:
+            emotion_scores = st.session_state.emotion_scores
+            best_emotion = max(emotion_scores, key=emotion_scores.get)
+            best_score = float(emotion_scores[best_emotion])
+            emotion_art = {"sadness":("☁️","#8E77B5"),"anger":("🔥","#D94F70"),"fear":("🌧️","#6C91B8"),"joy":("☀️","#E7A34E"),"surprise":("✨","#B17CC4"),"neutral":("🌸","#D96F9B")}
+            st.markdown("#### Your emotion snapshot")
+            emoji, accent = emotion_art.get(best_emotion,("💗","#D94F87"))
+            st.markdown(f"""<div style="display:flex;align-items:center;gap:1rem;padding:1rem 1.1rem;border-radius:20px;border:1px solid #F0C3D5;background:linear-gradient(110deg,#FCE1ED,#FFEBDD 72%,#FFFFFF);box-shadow:0 8px 22px rgba(169,47,101,.07);margin:.35rem 0 1rem;"><div style="font-size:2.3rem;">{emoji}</div><div style="flex:1;"><div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;font-weight:800;color:#A92F65;">Leading emotion cue</div><div style="font-size:1.55rem;font-weight:850;color:#432A38;">{best_emotion.title()}</div><div style="font-size:.88rem;color:#806A76;">Estimated from the available signals</div></div><div style="font-size:1.45rem;font-weight:850;color:{accent};">{best_score:.0%}</div></div>""", unsafe_allow_html=True)
+            st.markdown("**Emotion mix**")
+            top_emotions = sorted(emotion_scores.items(), key=lambda item: item[1], reverse=True)[:3]
+            emotion_cols = st.columns(len(top_emotions))
+            for emotion_col, (label, score) in zip(emotion_cols, top_emotions):
+                icon_emoji, icon_color = emotion_art.get(label,("💗","#D94F87"))
+                with emotion_col:
+                    st.markdown(f"""<div style="height:100%;padding:.8rem;border-radius:16px;border:1px solid #F2D0DD;background:rgba(255,255,255,.78);text-align:center;"><div style="font-size:1.45rem;">{icon_emoji}</div><div style="font-weight:800;color:#432A38;margin:.25rem 0;">{label.title()}</div><div style="font-size:1.15rem;font-weight:850;color:{icon_color};">{float(score):.0%}</div></div>""", unsafe_allow_html=True)
+            st.markdown("**Relative signal strength**")
+            st.progress(max(0.0, min(1.0, best_score)))
+            st.caption("This is a relative model score, not a calibrated probability or diagnosis. Visible expressions and spoken words do not prove how someone feels.")
+            st.markdown("**Signal distribution**")
+            emotion_chart_df = pd.DataFrame({
+                "Relative score": emotion_scores
+            }).sort_values("Relative score", ascending=True)
+            st.bar_chart(emotion_chart_df, horizontal=True)
+            st.caption("Scores summarize model outputs; they should be interpreted as uncertain cues, not ground truth.")
+            with st.expander("How this estimate was formed"):
+                for note in st.session_state.emotion_notes:
+                    st.write(f"- {note}")
+
+        if st.session_state.last_notes:
+            st.write("**Extracted feature notes**")
+            for note in st.session_state.last_notes:
+                st.write(f"- {note}")
+
+        left, right = st.columns(2)
+        with left:
+            st.markdown("#### Reply strategy scores")
+            score_df = pd.DataFrame({"Response": RESPONSES, "Score": scores})
+            st.bar_chart(score_df.set_index("Response"))
+            st.caption("Scores = learned associations (x · W) plus the stress bias. Higher wins.")
+        with right:
+            st.markdown("#### NEUROENDO's reply")
+            st.markdown(f"**Strategy:** {pred}")
+            reply = make_response(pred, current["emotion_scores"], current["uncertainty"],
+                                  st.session_state.reply_variant, text=st.session_state.transcript)
+            st.markdown(f'<div class="neo-insight-card" style="font-size:1.02rem;line-height:1.5;">{reply}</div>',
+                        unsafe_allow_html=True)
+            r_emo, s_emo = emotional_drive(x)
+            st.caption(f"Your detected state pushes reward by {r_emo:.2f} and stress by {s_emo:.2f}.")
+
+        st.markdown("#### Was that the right kind of reply?")
+        if st.session_state.get("feedback_done"):
+            st.success("Thanks — feedback learned. Send a new message or recording to continue.")
+        else:
+            st.write("Accept it, or pick the reply style you'd have preferred. The network and the endocrine system both learn from this.")
+            fb_left, fb_right = st.columns([1, 2])
+            with fb_left:
+                accept = st.button("👍 Good reply", type="primary", use_container_width=True)
+            with fb_right:
+                alternatives = [r for r in RESPONSES if r != pred]
+                chosen_alt = st.selectbox("I'd have preferred…", alternatives, key="feedback_target")
+                correct = st.button("Teach this instead", use_container_width=True)
+            if accept or correct:
+                target = pred if accept else chosen_alt
+                accepted = bool(accept)
+                modulation = endocrine_modulation(st.session_state.reward, st.session_state.stress)
+                st.session_state.W, delta = hebbian_update(
+                    st.session_state.W, x, RESPONSES.index(target), probs, factor=modulation
+                )
+                st.session_state.reward, st.session_state.stress = endocrine_step(
+                    st.session_state.reward, st.session_state.stress, x, accepted
+                )
+                st.session_state.history.append({
+                    "Interaction": len(st.session_state.history) + 1,
+                    "Emotion": top_emotion,
+                    "Reply": pred,
+                    "Target": target,
+                    "Accepted": accepted,
+                    "Reward D": st.session_state.reward,
+                    "Stress S": st.session_state.stress,
+                    "Plasticity g": modulation,
+                    "Weight change norm": float(np.linalg.norm(delta)),
+                })
+                st.session_state.feedback_done = True
+                st.rerun()
 
 
 if st.session_state.active_page == "Model Insights":

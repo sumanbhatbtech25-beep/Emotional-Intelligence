@@ -2,11 +2,11 @@
 
 ## Responsibilities
 
-- **`app.py`** — Streamlit entry point: the chat front page (live camera + conversation + feedback), plus the Model Insights and A/B Experiment developer pages.
+- **`app.py`** — Streamlit entry point with two views switched from the top-right corner: **Chat** (live camera + conversation + feedback) and **Emotional Learning** (Emotion Studio, Model Insights, A/B Experiment, endocrine controller). Both share one network and endocrine state.
 - **`neuroendo/learning.py`** — builds the feature vector from emotion scores, the Hebbian/anti-Hebbian network, the artificial endocrine system (D, S, plasticity, stress bias), reply templates, session state, and the simulated-user A/B experiment. Runs without Streamlit, so it can be tested on its own.
 - **`neuroendo/replies.py`** — recognises life events in what the user said and words the reply for the chosen strategy.
 - **`neuroendo/emotion.py`** — speech transcription, text and facial-expression inference, acoustic arousal, score fusion, and uncertainty estimation.
-- **`neuroendo/media.py`** — low-resolution webcam capture, microphone buffering, video-frame sampling, and audio extraction.
+- **`neuroendo/media.py`** — low-resolution webcam capture, microphone buffering (de-interleaving browser stereo audio correctly), video-frame sampling, and audio extraction.
 - **`requirements.txt`** — runtime dependencies.
 
 ## Data flow

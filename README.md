@@ -17,20 +17,30 @@ NEUROENDO reads your face, voice and words, turns them into **emotion scores** (
 
 | Workspace | Explore |
 |---|---|
-| **💬 Chat** (front page) | Live camera on one side, conversation on the other. Talk or type; NEUROENDO senses your emotion and replies |
-| **✧ Model Insights** (sidebar) | Learned weights (incl. negative anti-Hebbian links), reward/stress/plasticity history, acceptance rate |
-| **⇄ A/B Experiment** (sidebar) | Plain vs endocrine-modulated learning with simulated users whose preferences change |
+Two buttons in the top-right corner switch between the views:
+
+**💬 Chat** (front page): live camera on one side, conversation on the other. Talk or type; NEUROENDO senses your emotion and replies.
+
+**🧠 Emotional Learning**: the full non-quantum learning site, with these workspaces in its sidebar:
+
+| Workspace | Explore |
+|---|---|
+| **♡ Emotion Studio** | Type a message or record with camera + mic, see the emotion snapshot, reply strategy scores and architecture, then accept or correct the reply |
+| **✧ Model Insights** | Learned weights (incl. negative anti-Hebbian links), reward/stress/plasticity history, acceptance rate |
+| **⇄ A/B Experiment** | Plain vs endocrine-modulated learning with simulated users whose preferences change |
 
 ## 💬 Using the chat
 
 1. Press **START** on the camera and allow camera + microphone access.
 2. Tell NEUROENDO about your day (e.g. *"I passed my test today!"*), then press **STOP**.
-3. Press **Send what I said**. Your words appear in the chat with the emotion it sensed, followed by a reply, e.g. *"Hurray! 🎉 You passed your test — you've done great!"*
+3. Analysis starts automatically. Your words appear in the chat with the emotion it sensed, followed by a reply, e.g. *"Hurray! 🎉 You passed your test — you've done great!"*
 4. Press **👍 Nice reply**, or **🙈 Reply differently** to pick a better tone. It answers again in that tone and learns your preference.
 
-You can also just type in the message box. The learning details live in **Model Insights** and **A/B Experiment** in the sidebar (open it with the `»` arrow at the top left).
+You can also just type in the message box. Chat and Emotional Learning share the same network and endocrine state, so feedback in either one shows up in Model Insights.
 
 Replies respond to life events NEUROENDO recognises: passing or failing a test, getting a job or promotion, winning, birthdays, rejection, being scolded, break-ups, loss, illness, nerves before an exam, and arguments. Everything else gets a reply in the chosen tone.
+
+**Speech recognition.** Browser audio arrives as interleaved stereo; it is de-interleaved to mono, cleaned up (hum filter, resampled to 16 kHz, silence trimmed, volume evened out), then transcribed with Whisper `base.en`. For better accuracy on a more powerful server, set `WHISPER_MODEL = "openai/whisper-small.en"` in Streamlit secrets. The `.en` models expect English speech.
 
 The live stream uses a low-resolution, reduced-frame-rate setting to help performance. The app samples a limited number of frames and caps audio capture at 30 seconds. The first model run may be slower while pretrained models download and load.
 
