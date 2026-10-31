@@ -2,15 +2,16 @@
 
 ## Responsibilities
 
-- **`app.py`** — Streamlit entry point, theme, navigation, input controls, dashboard, and user feedback.
+- **`app.py`** — Streamlit entry point: the chat front page (live camera + conversation + feedback), plus the Model Insights and A/B Experiment developer pages.
 - **`neuroendo/learning.py`** — builds the feature vector from emotion scores, the Hebbian/anti-Hebbian network, the artificial endocrine system (D, S, plasticity, stress bias), reply templates, session state, and the simulated-user A/B experiment. Runs without Streamlit, so it can be tested on its own.
+- **`neuroendo/replies.py`** — recognises life events in what the user said and words the reply for the chosen strategy.
 - **`neuroendo/emotion.py`** — speech transcription, text and facial-expression inference, acoustic arousal, score fusion, and uncertainty estimation.
 - **`neuroendo/media.py`** — low-resolution webcam capture, microphone buffering, video-frame sampling, and audio extraction.
 - **`requirements.txt`** — runtime dependencies.
 
 ## Data flow
 
-1. The user records with webcam + microphone, or types a message.
+1. On the chat page, the user talks to the live camera, or types a message.
 2. The media layer samples frames and buffers audio.
 3. The emotion layer transcribes speech, classifies text and facial expression, measures acoustic arousal, fuses the results into six emotion scores, and estimates uncertainty.
 4. The learning layer builds `x = [emotion scores, arousal, uncertainty]` and scores each reply strategy with `x·W + stress bias`. The winning strategy selects the reply.

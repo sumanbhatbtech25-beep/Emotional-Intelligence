@@ -143,45 +143,10 @@ def hebbian_update(W, x, target_idx, probs, factor=1.0, eta=ETA):
 
 # ---------------------------------------------------------------- replies
 
-_REPLIES = {
-    "Supportive": [
-        "It sounds like things feel heavy right now. I'm here — do you want to talk it through, or would a small next step help more?",
-        "That sounds hard. You don't have to sort it all out at once. What's weighing on you most?",
-    ],
-    "De-escalating": [
-        "I can hear that you're frustrated, and that's understandable. Want to walk me through what happened so we can look at it calmly?",
-        "That sounds really annoying. Let's slow down for a second — what part bothers you most?",
-    ],
-    "Calming": [
-        "It sounds like you're feeling anxious. Let's take it one piece at a time — try a slow breath, then tell me the first thing on your mind.",
-        "That worry makes sense. What's the part you're most unsure about? We can break it down together.",
-    ],
-    "Upbeat": [
-        "That's lovely to hear! What made it go so well?",
-        "You sound really positive — that's great. Want to build on that momentum?",
-    ],
-    "Curious": [
-        "Oh, that sounds unexpected! What happened?",
-        "That caught you by surprise, didn't it? Tell me more.",
-    ],
-    "Neutral": [
-        "I'm listening. What would be most useful for you right now?",
-        "Thanks for sharing. How are you feeling about it?",
-    ],
-}
-
-
-def make_response(pred, emotion_scores=None, uncertainty=0.0, variant=0):
-    """Compose a reply from the chosen response strategy and the detected emotion."""
-    if uncertainty > 0.7 and pred == "Neutral":
-        return ("I couldn't read your signals confidently. Could you tell me in a few words how "
-                "you're feeling?")
-    reply = _REPLIES[pred][variant % len(_REPLIES[pred])]
-    if emotion_scores:
-        top = max(emotion_scores, key=emotion_scores.get)
-        if DEFAULT_RESPONSE_FOR.get(top) != pred and emotion_scores[top] >= 0.4:
-            reply += f" (I picked up mostly {top}, but you've taught me you prefer this kind of reply.)"
-    return reply
+def make_response(pred, emotion_scores=None, uncertainty=0.0, variant=0, text=""):
+    """Reply in the chosen strategy, tailored to what the person said (see replies.py)."""
+    from .replies import compose_reply
+    return compose_reply(pred, text=text, variant=variant, uncertainty=uncertainty)
 
 
 # ------------------------------------------------------------ session state
@@ -202,6 +167,7 @@ def init_state():
         "emotion_notes": [],
         "transcript": "",
         "reply_variant": 0,
+        "messages": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -211,7 +177,7 @@ def init_state():
 def reset_state():
     for key in ("W", "reward", "stress", "history", "last_x", "last_features", "last_pred",
                 "last_probs", "last_notes", "ab_results", "emotion_scores", "emotion_notes",
-                "transcript", "reply_variant"):
+                "transcript", "reply_variant", "messages"):
         st.session_state.pop(key, None)
     init_state()
 

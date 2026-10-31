@@ -17,19 +17,20 @@ NEUROENDO reads your face, voice and words, turns them into **emotion scores** (
 
 | Workspace | Explore |
 |---|---|
-| **♡ Emotion Studio** | Type a message or record with webcam + microphone → emotion estimate → reply → accept or correct it |
-| **✧ Model Insights** | Learned weights (incl. negative anti-Hebbian links), reward/stress/plasticity history, acceptance rate |
-| **⇄ A/B Experiment** | Plain vs endocrine-modulated learning with simulated users whose preferences change |
+| **💬 Chat** (front page) | Live camera on one side, conversation on the other. Talk or type; NEUROENDO senses your emotion and replies |
+| **✧ Model Insights** (sidebar) | Learned weights (incl. negative anti-Hebbian links), reward/stress/plasticity history, acceptance rate |
+| **⇄ A/B Experiment** (sidebar) | Plain vs endocrine-modulated learning with simulated users whose preferences change |
 
-## 🎥 Try the recording workflow
+## 💬 Using the chat
 
-1. Choose **Record with camera + mic**.
-2. Allow camera and microphone permissions and press **START**.
-3. Speak naturally for a few seconds, then press **STOP**.
-4. Select **Analyze recorded inputs** to see the transcript, emotion estimate and NEUROENDO's reply.
-5. Press **👍 Good reply**, or choose the reply style you'd have preferred and press **Teach this instead**.
+1. Press **START** on the camera and allow camera + microphone access.
+2. Tell NEUROENDO about your day (e.g. *"I passed my test today!"*), then press **STOP**.
+3. Press **Send what I said**. Your words appear in the chat with the emotion it sensed, followed by a reply, e.g. *"Hurray! 🎉 You passed your test — you've done great!"*
+4. Press **👍 Nice reply**, or **🙈 Reply differently** to pick a better tone. It answers again in that tone and learns your preference.
 
-No camera? Choose **Type a message**. Typed text goes through the same text-emotion model as transcribed speech.
+You can also just type in the message box. The learning details live in **Model Insights** and **A/B Experiment** in the sidebar (open it with the `»` arrow at the top left).
+
+Replies respond to life events NEUROENDO recognises: passing or failing a test, getting a job or promotion, winning, birthdays, rejection, being scolded, break-ups, loss, illness, nerves before an exam, and arguments. Everything else gets a reply in the chosen tone.
 
 The live stream uses a low-resolution, reduced-frame-rate setting to help performance. The app samples a limited number of frames and caps audio capture at 30 seconds. The first model run may be slower while pretrained models download and load.
 
@@ -42,6 +43,7 @@ The live stream uses a low-resolution, reduced-frame-rate setting to help perfor
 │   ├── __init__.py            # Python package marker
 │   ├── learning.py            # Emotion features, Hebbian network, endocrine system, replies, A/B test
 │   ├── emotion.py             # Speech, text, facial and audio analysis, fusion, uncertainty
+│   ├── replies.py             # Life-event detection and reply wording per strategy
 │   └── media.py               # Webcam/microphone capture and media helpers
 ├── requirements.txt           # Runtime dependencies
 └── README.md                  # Setup and project guide
@@ -66,7 +68,7 @@ Microphone ─────► Whisper speech-to-text ─► text-emotion model �
 
 **1. Emotion recognition.** Sampled webcam frames go to a pretrained facial-expression model (`trpakov/vit-face-expression`). Speech is transcribed with Whisper Tiny and classified by a pretrained text-emotion model (`j-hartmann/emotion-english-distilroberta-base`), with a transparent keyword fallback if that model can't load. Scores are fused (65% text, 35% face, plus a small arousal nudge). Uncertainty rises when a signal is missing, when face and words disagree, or when no emotion clearly leads.
 
-**2. Choosing a reply.** The feature vector `x = [6 emotion scores, arousal, uncertainty]` is multiplied by the weight matrix `W` (8 inputs × 6 reply strategies). `W` starts from a weak default pairing (sadness→Supportive, anger→De-escalating, fear→Calming, joy→Upbeat, surprise→Curious, neutral/uncertain→Neutral), so replies make sense before any training. The winning strategy selects a reply template.
+**2. Choosing a reply.** The feature vector `x = [6 emotion scores, arousal, uncertainty]` is multiplied by the weight matrix `W` (8 inputs × 6 reply strategies). `W` starts from a weak default pairing (sadness→Supportive, anger→De-escalating, fear→Calming, joy→Upbeat, surprise→Curious, neutral/uncertain→Neutral), so replies make sense before any training. The winning strategy is turned into words by `replies.py`. If you mention a recognised life event, the reply is about that event, in the chosen tone. A recognised event also nudges the emotion scores toward its usual emotion (e.g. "I passed" → joy), in case the text model reads it as neutral.
 
 **3. Learning from feedback** — a three-factor Hebbian rule with an anti-Hebbian term:
 
@@ -146,7 +148,7 @@ This is a shared-password gate, not individual accounts or OAuth. Never commit s
 - Emotion outputs are uncertain cues, not diagnoses or proof of someone's internal feelings.
 - Audio energy is only a rough arousal proxy; visible-expression cues can be unreliable.
 - Pretrained models and fallback heuristics are used; this is not a custom fine-tuned emotion model.
-- Replies are template-based per strategy, not generated by a language model.
+- Replies are templates per strategy and life event, not generated by a language model, so unusual messages get a general reply.
 - The A/B experiment uses simulated users and is illustrative, not proof of real-world improvement.
 - Record only yourself or people who have given informed consent. Captured media is held in the active app session for analysis; do not treat the app as secure long-term media storage.
 

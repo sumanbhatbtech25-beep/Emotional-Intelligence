@@ -11,7 +11,7 @@ TEXT_CUES = {
     "sadness": {
         "words": ["sad", "upset", "hurt", "cry", "crying", "lonely", "disappointed",
                   "embarrassed", "ashamed", "guilty", "miserable", "heartbroken",
-                  "depressed", "down", "unhappy", "scolded", "rejected", "ignored"],
+                  "depressed", "down", "unhappy", "scolded", "rejected", "ignored", "failed"],
         "phrases": ["got scolded", "was scolded", "got yelled at", "i feel bad",
                     "feel terrible", "made me cry", "i got in trouble", "feel awful"]
     },
@@ -27,7 +27,8 @@ TEXT_CUES = {
     },
     "joy": {
         "words": ["happy", "great", "excited", "joyful", "proud", "relieved", "love",
-                  "wonderful", "amazing", "glad", "delighted", "hopeful"],
+                  "wonderful", "amazing", "glad", "delighted", "hopeful", "passed",
+                  "cleared", "won", "selected", "promoted", "aced", "celebrate", "yay", "hurray"],
         "phrases": ["so happy", "can't wait", "that went well", "feeling good"]
     },
     "surprise": {
@@ -163,6 +164,24 @@ def infer_facial_emotion(image_bytes):
             "Facial-expression model unavailable; the basic smile detector cannot reliably detect sadness.",
             f"Model error: {type(exc).__name__}. Text analysis is still available."
         ]
+
+def apply_event_hint(text_scores, text, weight=0.6):
+    """Blend in the emotion carried by a recognised life event ("I passed my test" -> joy).
+
+    Pretrained classifiers sometimes read event statements as neutral; the event
+    hint nudges the text scores towards the event's usual emotion.
+    """
+    from .replies import detect_event
+    event, _ = detect_event(text)
+    if not event:
+        return text_scores, None
+    scores = dict(text_scores or {label: 0.0 for label in EMOTION_LABELS})
+    for label in EMOTION_LABELS:
+        scores[label] = (1 - weight) * float(scores.get(label, 0.0))
+    scores[event["emotion"]] += weight
+    total = sum(scores.values()) or 1.0
+    return {k: v / total for k, v in scores.items()}, event["key"]
+
 
 def combine_emotion_scores(text_scores=None, face_scores=None, audio_arousal=None):
     combined = {label: 0.0 for label in EMOTION_LABELS}
