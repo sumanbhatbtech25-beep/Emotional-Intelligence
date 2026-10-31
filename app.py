@@ -324,7 +324,7 @@ STYLE_LABELS = {"Supportive": "Supportive 💗", "De-escalating": "Understanding
                 "Upbeat": "Cheerful 🎉", "Curious": "Curious 🤔", "Neutral": "Just listen 🌸"}
 
 
-def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, typed=False):
+def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, typed=False, frames=None):
     """Run one conversational turn: fuse emotion, pick a reply strategy, add both chat bubbles."""
     event_key = None
     if user_text:
@@ -360,6 +360,58 @@ def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, 
     st.session_state.last_features = {"emotion_scores": combined, "arousal": arousal, "uncertainty": uncertainty}
     st.session_state.last_x, st.session_state.last_probs = x, probs
     st.session_state.last_pred, st.session_state.last_scores = strategy, scores
+    st.session_state.last_notes = notes
+    st.session_state.emotion_source = "typed in Chat" if typed else "Chat camera + mic recording"
+    st.session_state.chat_capture = {
+        "source": st.session_state.emotion_source,
+        "frames": list(frames or [])[:4],
+        "face_scores": face_scores,
+        "text_scores": text_scores,
+        "fused": combined,
+        "arousal": arousal,
+        "uncertainty": uncertainty,
+        "transcript": user_text,
+        "event": event_key,
+        "strategy": strategy,
+        "reply": reply,
+    }
+    st.session_state.feedback_done = False
+
+
+def render_chat_capture(cap, key):
+    """Show the analysis of the latest Chat input: video frames, words, face vs voice vs fused."""
+    st.markdown(
+        f'<div class="neo-studio"><div style="font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;'
+        f'font-weight:850;color:#A92F65;">From the Chat front page</div>'
+        f'<div style="font-size:1.15rem;font-weight:850;color:#432A38;margin:.2rem 0;">Analysis of your latest {cap["source"]}</div>'
+        f'<div style="color:#806A76;font-size:.88rem;">No need to record again here — this is what NEUROENDO saw and heard.</div></div>',
+        unsafe_allow_html=True)
+    if cap["frames"]:
+        st.markdown("**Video frames analysed**")
+        cols = st.columns(len(cap["frames"]))
+        for col, frame in zip(cols, cap["frames"]):
+            col.image(frame, use_container_width=True)
+    if cap["transcript"]:
+        st.markdown(f"**Words heard:** “{cap['transcript']}”")
+    elif cap["frames"]:
+        st.caption("No words were recognised in the recording, so the estimate relies on facial expression.")
+    rows = {}
+    if cap["face_scores"]:
+        rows["Face (video)"] = cap["face_scores"]
+    if cap["text_scores"]:
+        rows["Words (voice / text)"] = cap["text_scores"]
+    rows["Fused"] = cap["fused"]
+    comp = pd.DataFrame(rows).reindex(EMOTIONS).fillna(0.0)
+    st.markdown("**What each signal suggested**")
+    st.bar_chart(comp)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Leading emotion", max(cap["fused"], key=cap["fused"].get).title())
+    c2.metric("Voice arousal", f'{cap["arousal"]:.2f}')
+    c3.metric("Uncertainty", f'{cap["uncertainty"]:.2f}')
+    c4.metric("Reply strategy", cap["strategy"])
+    if cap.get("event"):
+        st.caption(f"Recognised life event: {cap['event'].replace('_', ' ')}.")
+    st.markdown(f"**NEUROENDO replied:** {cap['reply']}")
 
 
 def learn_from(message, target, accepted):
@@ -471,7 +523,7 @@ if st.session_state.view == "Chat":
                         notes += text_notes
                 else:
                     notes.append("No microphone audio was captured.")
-                respond(transcript, text_scores, face_scores, arousal, face_detected, notes)
+                respond(transcript, text_scores, face_scores, arousal, face_detected, notes, frames=captured_frames)
             capture_buffer.clear()
             st.rerun()
 
@@ -604,7 +656,17 @@ st.markdown(
 
 
 if st.session_state.active_page == "Emotion Studio":
-    mode = st.radio("Input mode", ["Type a message", "Record with camera + mic"], horizontal=True)
+    has_chat_capture = bool(st.session_state.get("chat_capture"))
+    mode_options = (["Use my Chat recording"] if has_chat_capture else []) + ["Type a message", "Record with camera + mic"]
+    mode = st.radio("Input mode", mode_options, horizontal=True)
+    if mode == "Use my Chat recording":
+        cap = st.session_state.chat_capture
+        render_chat_capture(cap, "studio")
+        st.session_state.last_features = {"emotion_scores": cap["fused"], "arousal": cap["arousal"],
+                                          "uncertainty": cap["uncertainty"]}
+        st.session_state.emotion_scores = cap["fused"]
+        st.session_state.transcript = cap["transcript"]
+        st.caption("The learning section below uses this same analysis. Accept or correct the reply to teach the network.")
 
     if mode == "Type a message":
         st.caption("Type how you're feeling. The text goes through the same emotion model used for transcribed speech.")
@@ -623,6 +685,7 @@ if st.session_state.active_page == "Emotion Studio":
             st.session_state.transcript = typed_text.strip()
             st.session_state.last_features = {"emotion_scores": combined, "arousal": typed_arousal, "uncertainty": uncertainty}
             st.session_state.last_notes = [f"Typed message with intensity {typed_arousal:.2f}."]
+            st.session_state.emotion_source = "typed in Emotion Studio"
             st.session_state.feedback_done = False
             st.session_state.reply_variant += 1
             st.rerun()
@@ -867,6 +930,11 @@ if st.session_state.active_page == "Model Insights":
     st.markdown('<div class="neo-section"><span class="neo-number">02</span><span class="neo-heading">Latest message</span><span class="neo-kicker">What the model saw</span></div>', unsafe_allow_html=True)
     if st.session_state.get("last_features"):
         lf = st.session_state.last_features
+        cap = st.session_state.get("chat_capture")
+        if cap and cap["frames"] and st.session_state.get("emotion_source") == cap["source"]:
+            st.markdown("**Video frames from the Chat recording**")
+            for col, frame in zip(st.columns(len(cap["frames"])), cap["frames"]):
+                col.image(frame, use_container_width=True)
         if st.session_state.transcript:
             st.markdown(f"**Words:** “{st.session_state.transcript}”")
         m1, m2, m3 = st.columns(3)

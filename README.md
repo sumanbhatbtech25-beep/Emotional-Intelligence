@@ -38,6 +38,8 @@ Two buttons in the top-right corner switch between the views:
 
 You can also just type in the message box. Chat and Emotional Learning share the same network and endocrine state, so feedback in either one shows up in Model Insights.
 
+Your latest Chat recording is analysed in **Emotional Learning → Emotion Studio** too (input mode **Use my Chat recording**). It shows the video frames that were analysed, the words heard, what the face and the voice each suggested, and the fused result, so you don't need to record twice.
+
 Replies respond to life events NEUROENDO recognises: passing or failing a test, getting a job or promotion, winning, birthdays, rejection, being scolded, break-ups, loss, illness, nerves before an exam, and arguments. Everything else gets a reply in the chosen tone.
 
 **Speech recognition.** Browser audio arrives as interleaved stereo; it is de-interleaved to mono, cleaned up (hum filter, resampled to 16 kHz, silence trimmed, volume evened out), then transcribed with Whisper `base.en`. For better accuracy on a more powerful server, set `WHISPER_MODEL = "openai/whisper-small.en"` in Streamlit secrets. The `.en` models expect English speech.

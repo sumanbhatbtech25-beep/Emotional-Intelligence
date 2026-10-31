@@ -289,6 +289,9 @@ def visual_features(image_bytes):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         smile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_smile.xml")
+        if face_cascade.empty() or smile_cascade.empty():
+            # Detector files missing (e.g. OpenCV 5): don't treat that as "no face".
+            return 0.0, 0.5, ["Face-detector files unavailable; relying on the facial-expression model."]
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
         if len(faces) == 0:
             return 0.0, 1.0, ["No face detected; visual input marked uncertain."]
