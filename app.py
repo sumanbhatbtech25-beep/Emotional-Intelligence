@@ -1,8 +1,15 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
-from neuroendo.learning import init_state, render_network_svg, run_ab_experiment, clip, endocrine_modulation, make_response, update_endocrine
-from neuroendo.emotion import EMOTION_LABELS, classify_text_fallback, transcribe_audio, infer_text_emotion, infer_facial_emotion, combine_emotion_scores, visual_features, audio_features, average_emotion_scores
+from neuroendo.learning import (
+    EMOTIONS, FEATURES, RESPONSES, init_state, reset_state, render_network_svg, run_ab_experiment,
+    build_features, predict, hebbian_update, endocrine_modulation, endocrine_step, emotional_drive,
+    make_response,
+)
+from neuroendo.emotion import (
+    transcribe_audio, infer_text_emotion, infer_facial_emotion, combine_emotion_scores,
+    visual_features, audio_features, average_emotion_scores, estimate_uncertainty,
+)
 from neuroendo.media import LiveCaptureBuffer, WebcamVideoProcessor, MicrophoneAudioProcessor, extract_video_frames, extract_video_audio, webrtc_streamer, WebRtcMode, RTCConfiguration
 
 
@@ -252,14 +259,10 @@ def require_app_password():
         configured_password = ""
 
     if not configured_password:
-        st.error("App access is not configured yet.")
-        st.info(
-            "For Streamlit Community Cloud, open your app's Settings → Secrets "
-            "and add APP_PASSWORD = \"a-long-unique-password\". "
-            "For local use, add the same entry to .streamlit/secrets.toml. "
-            "Do not commit secrets.toml or put the password in source code."
-        )
-        st.stop()
+        # Gate is optional: with no APP_PASSWORD secret the app is open.
+        with st.sidebar:
+            st.caption("🔓 Open access. Set APP_PASSWORD in Streamlit secrets to require a shared password.")
+        return
 
     if st.session_state.get("authenticated", False):
         with st.sidebar:
@@ -285,8 +288,6 @@ def require_app_password():
 require_app_password()
 
 
-RESPONSES = ["Supportive", "Neutral", "Upbeat"]
-FEATURES = ["Visual positive cue", "Audio cue", "Uncertainty cue"]
 init_state()
 
 st.markdown("""
@@ -305,8 +306,9 @@ border: 1px solid #F3C2D6; box-shadow: 0 10px 28px rgba(169,47,101,.08);">
 </div>
 """, unsafe_allow_html=True)
 st.markdown(
-    "Video frames and the video's audio track feed a small Hebbian association network. "
-    "A simulated artificial endocrine system modulates how strongly the network learns."
+    "Your face, voice and words are turned into emotion scores. Those scores drive a small Hebbian "
+    "network that picks how to reply, and a simulated endocrine system — reacting to your emotion and "
+    "to whether its replies land — shapes both the reply and how fast the network learns."
 )
 
 
@@ -341,23 +343,15 @@ with st.sidebar:
     st.caption("Choose a workspace to keep each task focused.")
     st.divider()
     st.markdown('<div class="neo-sidebar-label">Artificial endocrine controller</div>', unsafe_allow_html=True)
-    st.write("Simulated regulatory variables — not measured biological hormones.")
-    st.session_state.reward = st.slider("Reward-like signal (D)", 0.0, 1.0, float(st.session_state.reward), 0.05)
-    st.session_state.stress = st.slider("Stress-like signal (S)", 0.0, 1.0, float(st.session_state.stress), 0.05)
+    st.write("Simulated regulatory variables, updated automatically from your detected emotion and your feedback. Not measured hormones.")
+    endo_c1, endo_c2 = st.columns(2)
+    endo_c1.metric("Reward D", f"{st.session_state.reward:.2f}")
+    endo_c2.metric("Stress S", f"{st.session_state.stress:.2f}")
     mod = endocrine_modulation(st.session_state.reward, st.session_state.stress)
-    st.metric("Learning modulation g(H)", f"{mod:.2f}×")
-    st.caption("Rule: g(H) = clip(1 + D − S, 0.2, 1.5)")
-    if st.button("Reset learned weights and history", use_container_width=True):
-        st.session_state.W = np.zeros((3, 3), dtype=float)
-        st.session_state.history = []
-        st.session_state.last_x = None
-        st.session_state.last_features = None
-        st.session_state.last_pred = None
-        st.session_state.last_notes = []
-        st.session_state.emotion_scores = None
-        st.session_state.emotion_notes = []
-        st.session_state.transcript = ""
-        st.session_state.ab_results = None
+    st.metric("Plasticity g(H)", f"{mod:.2f}×")
+    st.caption("g(H) = clip(1 + 2S − D, 0.2, 2.0): stress speeds re-learning, sustained reward consolidates.")
+    if st.button("Reset network, hormones and history", use_container_width=True):
+        reset_state()
         st.rerun()
 
 st.markdown(
@@ -367,18 +361,27 @@ st.markdown(
 
 
 if st.session_state.active_page == "Emotion Studio":
-    mode = st.radio("Input mode", ["Demo / simulated signals", "Record with camera + mic"], horizontal=True)
+    mode = st.radio("Input mode", ["Type a message", "Record with camera + mic"], horizontal=True)
 
-    if mode == "Demo / simulated signals":
-        st.caption("Adjust simulated cues to explore the learning system without recording.")
-        demo_col1, demo_col2, demo_col3 = st.columns(3)
-        with demo_col1:
-            visual_cue = st.slider("Visual cue", 0.0, 1.0, 0.55, 0.05, help="Simulated expression-related cue.")
-        with demo_col2:
-            audio_cue = st.slider("Audio arousal cue", 0.0, 1.0, 0.35, 0.05, help="Simulated acoustic arousal cue.")
-        with demo_col3:
-            visual_uncertainty = st.slider("Signal uncertainty", 0.0, 1.0, 0.20, 0.05, help="Simulated uncertainty in the visual signal.")
-        notes = ["Demo mode is using simulated visual, audio, and uncertainty values."]
+    if mode == "Type a message":
+        st.caption("Type how you're feeling. The text goes through the same emotion model used for transcribed speech.")
+        typed_text = st.text_area("Your message", "I got scolded at work today and I feel awful.", height=80)
+        typed_arousal = st.slider("How intense / energetic does this feel?", 0.0, 1.0, 0.4, 0.05,
+                                  help="Stands in for the acoustic arousal cue that a voice recording would provide.")
+        if st.button("Analyze message", type="primary"):
+            with st.spinner("Reading the emotion in your message…"):
+                text_scores, text_notes = infer_text_emotion(typed_text)
+            combined = combine_emotion_scores(text_scores=text_scores, audio_arousal=typed_arousal)
+            uncertainty = estimate_uncertainty(text_scores=text_scores, combined=combined, face_detected=False)
+            uncertainty = max(0.0, uncertainty - 0.2)  # typed input: no face expected, don't penalise it
+            st.session_state.emotion_scores = combined
+            st.session_state.emotion_notes = text_notes
+            st.session_state.transcript = typed_text.strip()
+            st.session_state.last_features = {"emotion_scores": combined, "arousal": typed_arousal, "uncertainty": uncertainty}
+            st.session_state.last_notes = [f"Typed message with intensity {typed_arousal:.2f}."]
+            st.session_state.feedback_done = False
+            st.session_state.reply_variant += 1
+            st.rerun()
 
     if mode == "Record with camera + mic":
         st.markdown("""
@@ -396,7 +399,10 @@ if st.session_state.active_page == "Emotion Studio":
             key="neuroendo-live-recorder",
             mode=WebRtcMode.SENDRECV,
             rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}),
-            media_stream_constraints={\n                "video": {"width": {"ideal": 480, "max": 640}, "height": {"ideal": 360, "max": 480}, "frameRate": {"ideal": 10, "max": 12}},\n                "audio": {"echoCancellation": True, "noiseSuppression": True, "autoGainControl": True},\n            },
+            media_stream_constraints={
+                "video": {"width": {"ideal": 480, "max": 640}, "height": {"ideal": 360, "max": 480}, "frameRate": {"ideal": 10, "max": 12}},
+                "audio": {"echoCancellation": True, "noiseSuppression": True, "autoGainControl": True},
+            },
             video_processor_factory=lambda: WebcamVideoProcessor(capture_buffer),
             audio_processor_factory=lambda: MicrophoneAudioProcessor(capture_buffer),
             async_processing=True,
@@ -424,9 +430,8 @@ if st.session_state.active_page == "Emotion Studio":
             else:
                 with st.spinner("Analyzing recorded face and microphone inputs…"):
                     visual_results = [visual_features(frame) for frame in captured_frames]
-                    visual_cue = float(np.mean([result[0] for result in visual_results]))
-                    visual_uncertainty = float(np.mean([result[1] for result in visual_results]))
-                    vnotes = [note for result in visual_results for note in result[2]]
+                    face_detected = any(result[1] < 1.0 for result in visual_results)
+                    vnotes = list(dict.fromkeys(note for result in visual_results for note in result[2]))
                     face_score_sets, face_notes = [], []
                     for frame in captured_frames:
                         frame_scores, frame_note = infer_facial_emotion(frame)
@@ -444,45 +449,45 @@ if st.session_state.active_page == "Emotion Studio":
                         text_scores, text_notes = infer_text_emotion(transcript) if transcript else (None, [])
                     else:
                         text_notes = ["No microphone audio was captured; speech and acoustic analysis were skipped."]
-                    st.session_state.emotion_scores = combine_emotion_scores(text_scores=text_scores, face_scores=face_scores, audio_arousal=audio_cue)
-                    st.session_state.emotion_notes = speech_notes + text_notes + face_notes + anot
+                    combined = combine_emotion_scores(text_scores=text_scores, face_scores=face_scores, audio_arousal=audio_cue)
+                    uncertainty = estimate_uncertainty(text_scores=text_scores, face_scores=face_scores,
+                                                       combined=combined, face_detected=face_detected)
+                    st.session_state.emotion_scores = combined
+                    st.session_state.emotion_notes = speech_notes + text_notes + list(dict.fromkeys(face_notes)) + anot
                     st.session_state.emotion_source = "recorded webcam frames + microphone audio"
-                    st.session_state.last_features = {"visual": visual_cue, "audio": audio_cue, "uncertainty": visual_uncertainty}
+                    st.session_state.last_features = {"emotion_scores": combined, "arousal": audio_cue, "uncertainty": uncertainty}
                     st.session_state.last_notes = vnotes + anot
+                    st.session_state.feedback_done = False
+                    st.session_state.reply_variant += 1
                     st.success("Recording analyzed. Review the detected cues and transcript below.")
                     st.rerun()
 
 
-    # Demo mode updates the current input on each rerun. Captured mode uses the last extracted feature set.
-    if mode == "Demo / simulated signals":
-        current = {"visual": float(visual_cue), "audio": float(audio_cue), "uncertainty": float(visual_uncertainty)}
-        st.session_state.last_features = current
-        st.session_state.last_notes = notes
-    elif st.session_state.last_features is not None:
-        current = st.session_state.last_features
-    else:
-        current = None
+    current = st.session_state.last_features
 
     st.divider()
     with st.expander("System architecture", expanded=False):
         st.markdown("""
         ```text
-        Recorded webcam + microphone or demo signals
-                       |
-                       v
-           Classical feature extraction
-                       |
-                       v
-            Feature vector x = [V, A, U]
-                       |
-                       v
-           Hebbian association network <---- Feedback target y
-                       ^                         |
-                       |                         v
-           Endocrine modulation g(H) <---- Reward D / Stress S
-                       |
-                       v
-              Response + live dashboard
+        Webcam frames + microphone audio   (or a typed message)
+                 |                |
+          face-expression    Whisper speech-to-text -> text-emotion model
+              model                     |
+                 |                acoustic arousal
+                 v                      v
+          Fused emotion scores (sadness, anger, fear, joy, surprise, neutral)
+                 + arousal + uncertainty  =  feature vector x  (8 values)
+                                 |
+                                 v
+          Hebbian network  x @ W  + stress bias  -->  reply strategy + reply text
+                 ^                                         |
+                 |  dW = eta * g(H) * x (y - p)^T          v
+                 +---------------  your feedback (accept / correct)
+                                 |
+          Artificial endocrine system:
+            Reward D  <- accepted replies, positive emotion
+            Stress S  <- corrected replies, negative / high-arousal emotion
+            g(H) = clip(1 + 2S - D)  sets plasticity;  S biases toward careful replies
         ```
         """)
         st.caption("All processing is classical and non-quantum. D and S are simulated controller states, not measured hormones.")
@@ -490,27 +495,23 @@ if st.session_state.active_page == "Emotion Studio":
     st.markdown('<div class="neo-section"><span class="neo-number">01</span><span class="neo-heading">Learning &amp; response</span><span class="neo-kicker">Live interaction</span></div>', unsafe_allow_html=True)
 
     if current is None:
-        st.info("Select Demo mode or upload a video and click Analyze video.")
+        st.info("Type a message and click **Analyze message**, or record with your camera and microphone.")
     else:
-        x = np.array([current["visual"], current["audio"], current["uncertainty"]], dtype=float)
-        # Bias toward a neutral response initially to avoid arbitrary argmax ties.
-        W = st.session_state.W
-        scores = x @ W
-        if np.allclose(scores, 0):
-            pred_idx = 1
-        else:
-            pred_idx = int(np.argmax(scores))
+        x = build_features(current["emotion_scores"], current["arousal"], current["uncertainty"])
+        scores, probs, pred_idx = predict(x, st.session_state.W, S=st.session_state.stress)
         pred = RESPONSES[pred_idx]
         st.session_state.last_x = x
         st.session_state.last_pred = pred
+        st.session_state.last_probs = probs
 
         a, b, c = st.columns(3)
-        a.metric("Visual positive cue", f'{current["visual"]:.2f}')
-        b.metric("Audio arousal cue", f'{current["audio"]:.2f}')
-        c.metric("Uncertainty cue", f'{current["uncertainty"]:.2f}')
+        top_emotion = max(current["emotion_scores"], key=current["emotion_scores"].get)
+        a.metric("Leading emotion", top_emotion.title())
+        b.metric("Arousal cue", f'{current["arousal"]:.2f}')
+        c.metric("Uncertainty", f'{current["uncertainty"]:.2f}')
 
         if st.session_state.transcript:
-            st.markdown("#### Automatically detected speech")
+            st.markdown("#### What you said")
             st.write(st.session_state.transcript)
             st.caption("Check the transcript for speech-recognition mistakes; errors can affect the emotion estimate.")
 
@@ -542,46 +543,62 @@ if st.session_state.active_page == "Emotion Studio":
                 for note in st.session_state.emotion_notes:
                     st.write(f"- {note}")
 
-        st.write("**Extracted feature notes**")
-        for note in st.session_state.last_notes:
-            st.write(f"- {note}")
+        if st.session_state.last_notes:
+            st.write("**Extracted feature notes**")
+            for note in st.session_state.last_notes:
+                st.write(f"- {note}")
 
         left, right = st.columns(2)
         with left:
-            st.markdown("#### Neural association scores")
+            st.markdown("#### Reply strategy scores")
             score_df = pd.DataFrame({"Response": RESPONSES, "Score": scores})
             st.bar_chart(score_df.set_index("Response"))
-            st.caption("Scores are learned associations, not probabilities.")
+            st.caption("Scores = learned associations (x · W) plus the stress bias. Higher wins.")
         with right:
-            st.markdown("#### Current response")
-            st.markdown(f"### {pred}")
-            st.write(make_response(pred, current["visual"], current["audio"], current["uncertainty"]))
+            st.markdown("#### NEUROENDO's reply")
+            st.markdown(f"**Strategy:** {pred}")
+            reply = make_response(pred, current["emotion_scores"], current["uncertainty"],
+                                  st.session_state.reply_variant)
+            st.markdown(f'<div class="neo-insight-card" style="font-size:1.02rem;line-height:1.5;">{reply}</div>',
+                        unsafe_allow_html=True)
+            r_emo, s_emo = emotional_drive(x)
+            st.caption(f"Your detected state pushes reward by {r_emo:.2f} and stress by {s_emo:.2f}.")
 
-        st.markdown("#### Teach the model from feedback")
-        st.write("Choose the response that best fits this interaction. The selected feedback label updates the association weights.")
-        chosen = st.selectbox("Feedback target", RESPONSES, index=pred_idx, key="feedback_target")
-        reward_feedback = st.slider("Outcome reward", 0.0, 1.0, 0.8, 0.1, key="outcome_reward")
-        stress_feedback = st.slider("Challenge / stress cue", 0.0, 1.0, 0.2, 0.1, key="challenge_stress")
-        if st.button("Learn from this interaction", type="primary"):
-            y = np.zeros(3, dtype=float)
-            y[RESPONSES.index(chosen)] = 1.0
-            eta = 0.10
-            modulation = endocrine_modulation(st.session_state.reward, st.session_state.stress)
-            delta = eta * modulation * np.outer(x, y)
-            st.session_state.W = np.clip(st.session_state.W + delta, -2.0, 2.0)
-            st.session_state.reward, st.session_state.stress = update_endocrine(
-                st.session_state.reward, st.session_state.stress, reward_feedback, stress_feedback
-            )
-            st.session_state.history.append({
-                "Interaction": len(st.session_state.history) + 1,
-                "Target": chosen,
-                "Reward D": st.session_state.reward,
-                "Stress S": st.session_state.stress,
-                "Learning factor": modulation,
-                "Weight change norm": float(np.linalg.norm(delta))
-            })
-            st.success(f"Learned association for '{chosen}'. Weight-change magnitude: {np.linalg.norm(delta):.3f}")
-            st.rerun()
+        st.markdown("#### Was that the right kind of reply?")
+        if st.session_state.get("feedback_done"):
+            st.success("Thanks — feedback learned. Send a new message or recording to continue.")
+        else:
+            st.write("Accept it, or pick the reply style you'd have preferred. The network and the endocrine system both learn from this.")
+            fb_left, fb_right = st.columns([1, 2])
+            with fb_left:
+                accept = st.button("👍 Good reply", type="primary", use_container_width=True)
+            with fb_right:
+                alternatives = [r for r in RESPONSES if r != pred]
+                chosen_alt = st.selectbox("I'd have preferred…", alternatives, key="feedback_target")
+                correct = st.button("Teach this instead", use_container_width=True)
+            if accept or correct:
+                target = pred if accept else chosen_alt
+                accepted = bool(accept)
+                modulation = endocrine_modulation(st.session_state.reward, st.session_state.stress)
+                st.session_state.W, delta = hebbian_update(
+                    st.session_state.W, x, RESPONSES.index(target), probs, factor=modulation
+                )
+                st.session_state.reward, st.session_state.stress = endocrine_step(
+                    st.session_state.reward, st.session_state.stress, x, accepted
+                )
+                st.session_state.history.append({
+                    "Interaction": len(st.session_state.history) + 1,
+                    "Emotion": top_emotion,
+                    "Reply": pred,
+                    "Target": target,
+                    "Accepted": accepted,
+                    "Reward D": st.session_state.reward,
+                    "Stress S": st.session_state.stress,
+                    "Plasticity g": modulation,
+                    "Weight change norm": float(np.linalg.norm(delta)),
+                })
+                st.session_state.feedback_done = True
+                st.rerun()
 
 
 if st.session_state.active_page == "Model Insights":
@@ -592,103 +609,92 @@ if st.session_state.active_page == "Model Insights":
     st.markdown("**Learned association network**")
     st.markdown(render_network_svg(st.session_state.W), unsafe_allow_html=True)
     st.caption("The diagram is animated for visual clarity. Connection thickness reflects the current learned weight magnitude.")
-    st.markdown("**Hebbian weight matrix** — rows are input features, columns are response neurons.")
+    st.markdown("**Weight matrix W** — rows are input features (emotion scores, arousal, uncertainty), columns are reply strategies. It starts from a weak default pairing (sadness→Supportive, anger→De-escalating, fear→Calming, joy→Upbeat, surprise→Curious) and adapts to your feedback.")
     st.dataframe(w_df.style.format("{:.3f}"), use_container_width=True)
 
     if st.session_state.history:
         hist = pd.DataFrame(st.session_state.history)
+        hist["Acceptance (rolling 5)"] = hist["Accepted"].astype(float).rolling(5, min_periods=1).mean()
         st.markdown("**Learning history**")
         st.dataframe(hist, use_container_width=True)
         chart_col1, chart_col2 = st.columns(2)
         with chart_col1:
-            st.markdown("Reward-like state over interactions")
-            st.line_chart(hist.set_index("Interaction")[["Reward D"]])
+            st.markdown("Endocrine state over interactions")
+            st.line_chart(hist.set_index("Interaction")[["Reward D", "Stress S", "Plasticity g"]])
         with chart_col2:
-            st.markdown("Stress-like state over interactions")
-            st.line_chart(hist.set_index("Interaction")[["Stress S"]])
+            st.markdown("How often replies were accepted")
+            st.line_chart(hist.set_index("Interaction")[["Acceptance (rolling 5)"]])
     else:
-        st.info("No learning updates yet. Run an input, choose feedback, and click 'Learn from this interaction' to populate the weight matrix.")
+        st.info("No learning updates yet. Analyze a message or recording, then accept or correct the reply.")
 
     with st.expander("Model equations and limitations"):
         st.markdown(r"""
-    **Hebbian update with endocrine modulation**
+**Input.** \(x = [p_{sad}, p_{anger}, p_{fear}, p_{joy}, p_{surprise}, p_{neutral}, a, u]\) — fused emotion scores, acoustic arousal \(a\), uncertainty \(u\).
 
-    \[
-    \Delta W = \eta\,g(H)\,x\,y^T
-    \]
+**Reply choice.** \(s = xW + b(S)\), where \(b\) adds \(0.15S\) to Supportive, Calming and De-escalating. Strategy \(=\arg\max s\); \(p=\mathrm{softmax}(3s)\).
 
-    where \(x\) is the input feature vector, \(y\) is a one-hot feedback target, and
-    \(g(H)=\operatorname{clip}(1+D-S,0.2,1.5)\).
+**Three-factor Hebbian update with anti-Hebbian term.**
+\[ \Delta W = \eta\, g(H)\, x\,(y - p)^T,\qquad \eta = 0.25 \]
+\(x y^T\) strengthens the link to the reply you wanted; \(-x p^T\) weakens links to replies the network over-favours, so weights can go negative.
 
-    **Leaky endocrine states**
+**Endocrine system.** Leaky states (rate 0.25):
+\[ D \leftarrow 0.75D + 0.25\,(0.7\,\text{accepted} + 0.3\,r_{emo}),\quad S \leftarrow 0.75S + 0.25\,(0.7\,\text{corrected} + 0.3\,s_{emo}) \]
+\(r_{emo}\) comes from joy/surprise; \(s_{emo}\) from sadness, anger, fear and arousal.
+\[ g(H) = \mathrm{clip}(1 + 2S - D,\ 0.2,\ 2.0) \]
 
-    \[
-    D_{t+1}=0.9D_t+0.1R_t,\quad
-    S_{t+1}=0.9S_t+0.1Q_t
-    \]
-
-    These are intentionally simple engineering choices for a prototype. The camera feature is a basic smile-like cue and the audio feature is a rough acoustic-arousal proxy. Neither can reliably determine a person's internal emotional state. The model demonstrates learning dynamics and feedback, not clinical or definitive emotion detection.
-    """)
+**Limitations.** Emotion scores come from pretrained models (or a keyword fallback for text) and are uncertain cues, not ground truth. Replies are template-based per strategy, not generated by a language model. D and S are engineering variables inspired by neuromodulation, not a biological model.
+""")
 
 
 if st.session_state.active_page == "A/B Experiment":
     st.divider()
     st.markdown('<div class="neo-section"><span class="neo-number">03</span><span class="neo-heading">A/B learning experiment</span><span class="neo-kicker">Compare variants</span></div>', unsafe_allow_html=True)
     st.write(
-        "Both variants receive the same reproducible synthetic inputs, labels, training/test split, "
-        "and base learning rate. Variant A uses ordinary Hebbian updates; Variant B multiplies each "
-        "update by the simulated endocrine factor. This is a controlled demonstration, not evidence "
-        "of real-world emotional understanding."
+        "Both variants interact online with the same simulated users: noisy emotion scores in, a reply out, "
+        "then feedback. The simulated users prefer some non-default replies, give 10% random feedback, and "
+        "change their preferences half-way through. Both start from the same prior and use the same "
+        "Hebbian/anti-Hebbian rule and base learning rate. Variant B adds the endocrine system."
     )
     ab_col1, ab_col2 = st.columns([1, 2])
     with ab_col1:
-        ab_samples = st.select_slider(
-            "Synthetic examples", options=[60, 120, 240, 480], value=120, key="ab_samples"
-        )
+        ab_samples = st.select_slider("Interactions per user", options=[120, 240, 480], value=240, key="ab_samples")
+        ab_seeds = st.select_slider("Simulated users", options=[10, 20, 40], value=20, key="ab_seeds")
         if st.button("Run A/B comparison", type="primary"):
-            st.session_state.ab_results = run_ab_experiment(samples=int(ab_samples))
+            with st.spinner("Simulating users…"):
+                st.session_state.ab_results = run_ab_experiment(seeds=int(ab_seeds), samples=int(ab_samples))
     with ab_col2:
-        st.caption("The experiment uses fixed seed 42 so results are repeatable for the same sample count.")
+        st.caption("Accuracy = how often the reply chosen *before* feedback matched what the user wanted. Seeds 0…N−1, so results are repeatable.")
 
     if st.session_state.ab_results is not None:
         ab = st.session_state.ab_results
+        diff = ab["endo_accuracy"] - ab["plain_accuracy"]
         a1, a2, a3 = st.columns(3)
-        a1.metric("Model A · Ordinary", f"{ab['plain_accuracy']:.1%}")
-        a2.metric("Model B · Endocrine", f"{ab['endo_accuracy']:.1%}")
-        difference = ab["endo_accuracy"] - ab["plain_accuracy"]
-        a3.metric("Difference · B − A", f"{difference:+.1%}", delta=f"{difference:+.1%}")
-        result_left, result_right = st.columns(2)
-        with result_left:
-            st.markdown(f'<div class="neo-insight-card"><div class="neo-insight-label">Ordinary Hebbian · Model A</div><div class="neo-insight-value">{ab["plain_accuracy"]:.1%}</div><div style="height:8px;border-radius:99px;background:#F7E2EB;overflow:hidden;margin-top:.6rem;"><div style="width:{100*ab["plain_accuracy"]:.1f}%;height:100%;background:linear-gradient(90deg,#D94F87,#E88FB2);border-radius:99px;"></div></div><div style="font-size:.75rem;color:#806A76;margin-top:.45rem;">Baseline update rule</div></div>', unsafe_allow_html=True)
-        with result_right:
-            st.markdown(f'<div class="neo-insight-card"><div class="neo-insight-label">Endocrine-modulated · Model B</div><div class="neo-insight-value">{ab["endo_accuracy"]:.1%}</div><div style="height:8px;border-radius:99px;background:#F7E2EB;overflow:hidden;margin-top:.6rem;"><div style="width:{100*ab["endo_accuracy"]:.1f}%;height:100%;background:linear-gradient(90deg,#F0A57F,#D94F87);border-radius:99px;"></div></div><div style="font-size:.75rem;color:#806A76;margin-top:.45rem;">Feedback-modulated update rule</div></div>', unsafe_allow_html=True)
-        if abs(difference) < 1e-9:
-            st.info("Both variants reached the same test accuracy on this synthetic split.")
-        elif difference > 0:
-            st.success("Model B scored higher on this synthetic split. This does not establish real-world superiority.")
+        a1.metric("A · Plain Hebbian", f"{ab['plain_accuracy']:.1%}", help=f"± {ab['plain_std']:.1%} across users")
+        a2.metric("B · Endocrine", f"{ab['endo_accuracy']:.1%}", delta=f"{diff:+.1%}", help=f"± {ab['endo_std']:.1%} across users")
+        a3.metric("B wins", f"{ab['endo_wins']} / {ab['seeds']} users")
+        b1, b2, b3 = st.columns(3)
+        b1.metric("After preference shift · A", f"{ab['plain_post_shift']:.1%}", help="First 40 interactions after the shift")
+        b2.metric("After preference shift · B", f"{ab['endo_post_shift']:.1%}",
+                  delta=f"{ab['endo_post_shift'] - ab['plain_post_shift']:+.1%}")
+        b3.metric(f"Plain, best hand-tuned η={ab['best_fixed_eta']:g}", f"{ab['best_fixed_accuracy']:.1%}")
+
+        start = ab["curve_window"]
+        curve_df = pd.DataFrame({
+            "Interaction": np.arange(start, start + len(ab["curve_plain"])),
+            "A · Plain": ab["curve_plain"],
+            "B · Endocrine": ab["curve_endo"],
+        }).set_index("Interaction")
+        st.markdown(f"**Rolling accuracy ({ab['curve_window']}-interaction window, averaged over users)** — preferences change at interaction {ab['shift_at']}.")
+        st.line_chart(curve_df)
+
+        if ab["best_fixed_accuracy"] >= ab["endo_accuracy"] - 0.005:
+            st.info(
+                "Reading the result honestly: at the same base learning rate the endocrine system helps, mainly by "
+                "re-learning faster after the preference shift. A plain learner whose rate is hand-tuned with hindsight "
+                "reaches about the same accuracy, so the benefit is self-tuning plasticity, not extra information."
+            )
         else:
-            st.info("Model A scored higher on this synthetic split. Endocrine modulation changes update magnitude, not the information available.")
-        comp_df = pd.DataFrame({
-            "Variant": ["A · Ordinary Hebbian", "B · Endocrine-modulated"],
-            "Test accuracy": [ab["plain_accuracy"], ab["endo_accuracy"]]
-        }).set_index("Variant")
-        st.bar_chart(comp_df)
-        st.write(
-            f"Training examples: {ab['train_samples']} · Test examples: {ab['test_samples']} · "
-            "Same generated dataset and labels for both variants."
-        )
-        st.dataframe(pd.DataFrame({
-            "Variant": ["A · Ordinary Hebbian", "B · Endocrine-modulated"],
-            "Final test accuracy": [ab["plain_accuracy"], ab["endo_accuracy"]],
-            "Weight matrix norm": [
-                float(np.linalg.norm(ab["plain_weights"])),
-                float(np.linalg.norm(ab["endo_weights"]))
-            ]
-        }), use_container_width=True)
-        st.caption(
-            "Interpret cautiously: the synthetic labels follow a hand-designed rule, and endocrine "
-            "modulation changes update magnitude rather than adding new information. The comparison "
-            "is illustrative and does not guarantee that Variant B performs better."
-        )
+            st.success("The endocrine variant beat both the same-rate and the best hand-tuned plain learner on this run.")
+        st.caption("Synthetic users only — this illustrates the learning dynamics and is not evidence of real-world emotional understanding.")
 
     st.caption("Privacy note: this prototype processes captured media in the app session. Avoid recording other people without their informed consent.")

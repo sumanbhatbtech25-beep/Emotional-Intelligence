@@ -13,21 +13,23 @@
 
 ## 🌸 What it does
 
-NEUROENDO combines webcam frames, microphone audio, speech transcription, and visible-expression cues with a small **Hebbian association network**. Give feedback to adjust its weights, then explore the result in the dashboard.
+NEUROENDO reads your face, voice and words, turns them into **emotion scores** (sadness, anger, fear, joy, surprise, neutral), and uses those scores to decide **how to reply**: supportive, de-escalating, calming, upbeat, curious or neutral. The reply strategy is chosen by a small **Hebbian association network**. A simulated **artificial endocrine system** reacts to your emotional state and to whether its replies land. It biases the system toward careful replies when stress is high and controls how quickly the network re-learns from your feedback. Everything is classical (non-quantum).
 
 | Workspace | Explore |
 |---|---|
-| **♡ Emotion Studio** | Simulated inputs or direct webcam + microphone recording |
-| **✧ Model Insights** | Learned weights, network visualization, and reward/stress history |
-| **⇄ A/B Experiment** | Compare ordinary and endocrine-modulated learning on synthetic data |
+| **♡ Emotion Studio** | Type a message or record with webcam + microphone → emotion estimate → reply → accept or correct it |
+| **✧ Model Insights** | Learned weights (incl. negative anti-Hebbian links), reward/stress/plasticity history, acceptance rate |
+| **⇄ A/B Experiment** | Plain vs endocrine-modulated learning with simulated users whose preferences change |
 
 ## 🎥 Try the recording workflow
 
 1. Choose **Record with camera + mic**.
 2. Allow camera and microphone permissions and press **START**.
 3. Speak naturally for a few seconds, then press **STOP**.
-4. Select **Analyze recorded inputs** to inspect the cues and transcript.
-5. Choose a feedback target and select **Learn from this interaction**.
+4. Select **Analyze recorded inputs** to see the transcript, emotion estimate and NEUROENDO's reply.
+5. Press **👍 Good reply**, or choose the reply style you'd have preferred and press **Teach this instead**.
+
+No camera? Choose **Type a message**. Typed text goes through the same text-emotion model as transcribed speech.
 
 The live stream uses a low-resolution, reduced-frame-rate setting to help performance. The app samples a limited number of frames and caps audio capture at 30 seconds. The first model run may be slower while pretrained models download and load.
 
@@ -38,8 +40,8 @@ The live stream uses a low-resolution, reduced-frame-rate setting to help perfor
 ├── app.py                    # Streamlit UI and page layouts
 ├── neuroendo/
 │   ├── __init__.py            # Python package marker
-│   ├── learning.py            # Hebbian weights, endocrine rule, A/B experiment
-│   ├── emotion.py             # Speech, text, facial and audio cue analysis
+│   ├── learning.py            # Emotion features, Hebbian network, endocrine system, replies, A/B test
+│   ├── emotion.py             # Speech, text, facial and audio analysis, fusion, uncertainty
 │   └── media.py               # Webcam/microphone capture and media helpers
 ├── requirements.txt           # Runtime dependencies
 └── README.md                  # Setup and project guide
@@ -47,30 +49,57 @@ The live stream uses a low-resolution, reduced-frame-rate setting to help perfor
 
 The entry point is intentionally small and imports helpers from the `neuroendo` package. Keep UI layout in `app.py`; put learning logic in `learning.py`, emotion inference in `emotion.py`, and capture/decoding code in `media.py`.
 
-## 🧠 How learning works
+## 🧠 How it works
 
 ```text
-Webcam + microphone / demo signals
-                ↓
-      Feature extraction + cues
-                ↓
-         Feature vector x
-                ↓
-    Hebbian network ← feedback y
-                ↑
-    Reward (D) / stress (S)
-                ↓
-        Response + insights
+Webcam frames ──► face-expression model ─┐
+Microphone ─────► Whisper speech-to-text ─► text-emotion model ─┤──► fused emotion scores
+            └───► acoustic arousal ──────────────────────────────┘        + arousal + uncertainty
+                                                                              = feature vector x (8)
+                                                                                     │
+                              Artificial endocrine system                            ▼
+                          Reward D ◄─ accepted replies, positive emotion      x·W + stress bias
+                          Stress S ◄─ corrected replies, negative/aroused     ──► reply strategy + reply
+                                │                                                    │
+                     g(H) = plasticity ──────────► ΔW = η·g(H)·x(y − p)ᵀ ◄── your feedback y
 ```
 
-The weight update is:
+**1. Emotion recognition.** Sampled webcam frames go to a pretrained facial-expression model (`trpakov/vit-face-expression`). Speech is transcribed with Whisper Tiny and classified by a pretrained text-emotion model (`j-hartmann/emotion-english-distilroberta-base`), with a transparent keyword fallback if that model can't load. Scores are fused (65% text, 35% face, plus a small arousal nudge). Uncertainty rises when a signal is missing, when face and words disagree, or when no emotion clearly leads.
+
+**2. Choosing a reply.** The feature vector `x = [6 emotion scores, arousal, uncertainty]` is multiplied by the weight matrix `W` (8 inputs × 6 reply strategies). `W` starts from a weak default pairing (sadness→Supportive, anger→De-escalating, fear→Calming, joy→Upbeat, surprise→Curious, neutral/uncertain→Neutral), so replies make sense before any training. The winning strategy selects a reply template.
+
+**3. Learning from feedback** — a three-factor Hebbian rule with an anti-Hebbian term:
 
 ```text
-ΔW = η · g(H) · outer(x, y)
-g(H) = clip(1 + D − S, 0.2, 1.5)
+ΔW = η · g(H) · x (y − p)ᵀ        η = 0.25,  p = softmax(3 · x·W)
 ```
 
-The reward and stress values are **simulated controller variables**, not measured hormones. Learning updates the small association matrix during the current Streamlit session; it does **not** fine-tune the pretrained emotion models. Session state is not permanent storage, so learned weights may reset after a new session or app restart.
+`x yᵀ` strengthens the link to the reply you wanted. `−x pᵀ` weakens links to replies the network over-favours, so wrong associations fade and weights can become negative.
+
+**4. Artificial endocrine system.** Two leaky hormone-like states:
+
+```text
+D ← 0.75·D + 0.25·(0.7·accepted  + 0.3·positive-emotion drive)
+S ← 0.75·S + 0.25·(0.7·corrected + 0.3·negative/high-arousal drive)
+g(H) = clip(1 + 2S − D, 0.2, 2.0)     # plasticity
+bias = +0.15·S on Supportive / Calming / De-escalating
+```
+
+Stress speeds re-learning when replies keep missing, and sustained reward consolidates what works. A distressed user also nudges the system toward careful replies.
+
+D and S are **simulated controller variables**, not measured hormones. The network learns during the current Streamlit session only and does **not** fine-tune the pretrained emotion models.
+
+### What the A/B experiment shows
+
+With 20 simulated users × 240 interactions, preferences that differ from the default, 10% noisy feedback, and a preference change half-way:
+
+| Variant | Accuracy | After preference change |
+|---|---|---|
+| A · plain Hebbian (η = 0.25) | 69.2% | 45.2% |
+| **B · endocrine-modulated (η = 0.25)** | **71.5%** (better for 20/20 users) | **48.6%** |
+| Plain, best η chosen with hindsight (0.5) | 72.0% | — |
+
+The endocrine system beats plain learning at the same base rate, mostly by re-learning faster after the change. A plain learner whose rate is hand-tuned in hindsight reaches about the same accuracy. The benefit is **self-tuning plasticity**, not extra information. The app shows this comparison directly.
 
 ## 🚀 Run locally
 
@@ -102,6 +131,8 @@ The browser will request camera and microphone permissions. Live recording may r
 
 ### Optional shared-password gate
 
+Without a password the app is open.
+
 In Streamlit app **Settings → Secrets**, add:
 
 ```toml
@@ -115,7 +146,8 @@ This is a shared-password gate, not individual accounts or OAuth. Never commit s
 - Emotion outputs are uncertain cues, not diagnoses or proof of someone's internal feelings.
 - Audio energy is only a rough arousal proxy; visible-expression cues can be unreliable.
 - Pretrained models and fallback heuristics are used; this is not a custom fine-tuned emotion model.
-- The A/B experiment uses a hand-designed synthetic dataset and is illustrative, not proof of real-world improvement.
+- Replies are template-based per strategy, not generated by a language model.
+- The A/B experiment uses simulated users and is illustrative, not proof of real-world improvement.
 - Record only yourself or people who have given informed consent. Captured media is held in the active app session for analysis; do not treat the app as secure long-term media storage.
 
 ---

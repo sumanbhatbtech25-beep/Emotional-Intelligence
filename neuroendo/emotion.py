@@ -181,6 +181,32 @@ def combine_emotion_scores(text_scores=None, face_scores=None, audio_arousal=Non
         return {"sadness": 0, "anger": 0, "fear": 0, "joy": 0, "surprise": 0, "neutral": 1}
     return {k: v / total for k, v in combined.items()}
 
+def estimate_uncertainty(text_scores=None, face_scores=None, combined=None, face_detected=True):
+    """How unsure the system is about the fused emotion estimate (0 = confident, 1 = no signal).
+
+    Combines missing modalities, disagreement between text and face, and a flat
+    (low-margin) fused distribution.
+    """
+    if not text_scores and not face_scores:
+        return 1.0
+    missing = 0.0
+    if not text_scores:
+        missing += 0.3
+    if not face_scores or not face_detected:
+        missing += 0.2
+    disagreement = 0.0
+    if text_scores and face_scores:
+        t_top = max(text_scores, key=text_scores.get)
+        f_top = max(face_scores, key=face_scores.get)
+        disagreement = 0.0 if t_top == f_top else 0.2
+    flatness = 0.0
+    if combined:
+        ordered = sorted(combined.values(), reverse=True)
+        margin = ordered[0] - (ordered[1] if len(ordered) > 1 else 0.0)
+        flatness = 0.5 * (1.0 - clip(margin / 0.5))
+    return clip(missing + disagreement + flatness)
+
+
 def visual_features(image_bytes):
     """Extract a coarse visual cue using OpenCV Haar cascades.
     This is NOT reliable emotion recognition; it only estimates a smile-like visual cue."""
