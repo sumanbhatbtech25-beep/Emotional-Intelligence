@@ -11,7 +11,13 @@ from neuroendo.emotion import (
     transcribe_audio, infer_text_emotion, infer_facial_emotion, combine_emotion_scores,
     visual_features, audio_features, average_emotion_scores, estimate_uncertainty, apply_event_hint,
 )
-from neuroendo.media import LiveCaptureBuffer, WebcamVideoProcessor, MicrophoneAudioProcessor, extract_video_frames, extract_video_audio, webrtc_streamer, WebRtcMode, RTCConfiguration
+from neuroendo.media import LiveCaptureBuffer, WebcamVideoProcessor, MicrophoneAudioProcessor, webrtc_streamer, WebRtcMode, RTCConfiguration
+from neuroendo.security import (
+    MAX_TEXT_CHARS, IDLE_MINUTES, SESSION_MAX_HOURS, esc_html, plain_text_html, clean_text, wipe_personal_data,
+    enforce_idle_timeout, cap_list, login_locked_for, check_password,
+)
+import logging
+import time
 
 
 st.set_page_config(page_title="NEUROENDO", page_icon="🧠", layout="wide", initial_sidebar_state="auto")
@@ -251,8 +257,6 @@ html { scroll-behavior: smooth; scrollbar-color: #E58AAF #FFF0E5; scrollbar-widt
 
 # Optional shared-password gate. Configure APP_PASSWORD in Streamlit secrets.
 # This is a simple access gate, not individual user accounts or OAuth.
-import hmac
-
 def require_app_password():
     try:
         configured_password = st.secrets.get("APP_PASSWORD", "")
@@ -263,22 +267,35 @@ def require_app_password():
         # Gate is optional: with no APP_PASSWORD secret the app is open.
         return
 
-    if st.session_state.get("authenticated", False):
+    signed_in_at = st.session_state.get("authenticated_at")
+    if st.session_state.get("authenticated", False) and signed_in_at and \
+            time.time() - signed_in_at < SESSION_MAX_HOURS * 3600:
         with st.sidebar:
             if st.button("Log out"):
+                wipe_personal_data(keep_learning=False)
                 st.session_state["authenticated"] = False
+                st.session_state.pop("authenticated_at", None)
                 st.rerun()
         return
+    if st.session_state.get("authenticated"):
+        # Sign-in expired: drop the session's data before asking again.
+        wipe_personal_data(keep_learning=False)
+        st.session_state["authenticated"] = False
 
     st.title("🧠 NEUROENDO — Sign in")
     st.caption("Enter the shared app password to continue.")
+    wait = login_locked_for()
+    if wait:
+        st.error(f"Too many incorrect attempts. Try again in about {max(1, wait // 60)} minute(s).")
+        st.stop()
     with st.form("app_login_form", clear_on_submit=True):
-        password = st.text_input("App password", type="password")
+        password = st.text_input("App password", type="password", max_chars=256)
         submitted = st.form_submit_button("Sign in", type="primary")
 
     if submitted:
-        if hmac.compare_digest(str(password), str(configured_password)):
+        if check_password(password, configured_password):
             st.session_state["authenticated"] = True
+            st.session_state["authenticated_at"] = time.time()
             st.rerun()
         else:
             st.error("Incorrect password.")
@@ -288,6 +305,13 @@ require_app_password()
 
 
 init_state()
+if enforce_idle_timeout():
+    init_state()
+    st.toast(f"🔒 Your previous conversation was deleted after {IDLE_MINUTES} minutes of inactivity.")
+for _key, _limit in (("messages", 200), ("convo_log", 50), ("history", 500)):
+    cap_list(_key, _limit)
+if st.session_state.get("_flash_error"):
+    st.error(st.session_state.pop("_flash_error"))
 
 st.markdown("""
 <style>
@@ -310,6 +334,7 @@ st.markdown("""
 [data-testid="stChatMessage"] p { font-size:1rem; line-height:1.55; }
 [data-testid="stChatInput"] textarea { font-size:1rem; }
 .neo-video-hint { font-size:.84rem; color:#806A76; margin-top:.35rem; }
+.neo-said { white-space:pre-wrap; overflow-wrap:anywhere; font-size:1rem; line-height:1.55; color:#432A38; }
 [data-testid="stChatMessage"]:has(.neo-chip) { background:linear-gradient(120deg,#FCE1ED,#FFEBDD); border-color:#F0C3D5; }
 .stButton > button[kind="secondary"], [data-testid="stPopover"] button {
   background:rgba(255,255,255,.9); color:#A92F65; border:1px solid #EAC5D3; box-shadow:none; font-weight:650; }
@@ -325,8 +350,12 @@ STYLE_LABELS = {"Supportive": "Supportive 💗", "De-escalating": "Understanding
                 "Upbeat": "Cheerful 🎉", "Curious": "Curious 🤔", "Neutral": "Just listen 🌸"}
 
 
-def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, typed=False, frames=None):
-    """Run one conversational turn: fuse emotion, pick a reply strategy, add both chat bubbles."""
+def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, typed=False, frame_count=0):
+    """Run one conversational turn: fuse emotion, pick a reply strategy, add both chat bubbles.
+
+    Only derived results are kept: the video frames and audio are never stored here.
+    """
+    user_text = clean_text(user_text)
     event_key = None
     if user_text:
         text_scores, event_key = apply_event_hint(text_scores, user_text)
@@ -346,7 +375,10 @@ def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, 
 
     st.session_state.messages.append({
         "role": "user",
-        "text": user_text or "🎙️ *(I couldn't make out any words — going by your expression)*",
+        "plain": bool(user_text),
+        "text": user_text if user_text else (
+            "🎙️ *(I couldn't make out any words — going by your expression)*" if face_scores
+            else "🎙️ *(I couldn't make out any words)*"),
         "emotion": top,
         "via": "typed" if typed else "camera + mic",
     })
@@ -366,7 +398,7 @@ def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, 
     st.session_state.emotion_source = "typed in Chat" if typed else "Chat camera + mic recording"
     st.session_state.chat_capture = {
         "source": st.session_state.emotion_source,
-        "frames": list(frames or [])[:4],
+        "frames_analysed": int(frame_count),
         "face_scores": face_scores,
         "text_scores": text_scores,
         "fused": combined,
@@ -386,17 +418,16 @@ def render_chat_capture(cap, key):
     st.markdown(
         f'<div class="neo-studio"><div style="font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;'
         f'font-weight:850;color:#A92F65;">From the Chat front page</div>'
-        f'<div style="font-size:1.15rem;font-weight:850;color:#432A38;margin:.2rem 0;">Analysis of your latest {cap["source"]}</div>'
+        f'<div style="font-size:1.15rem;font-weight:850;color:#432A38;margin:.2rem 0;">Analysis of your latest message ({esc_html(cap["source"])})</div>'
         f'<div style="color:#806A76;font-size:.88rem;">No need to record again here — this is what NEUROENDO saw and heard.</div></div>',
         unsafe_allow_html=True)
-    if cap["frames"]:
-        st.markdown("**Video frames analysed**")
-        cols = st.columns(len(cap["frames"]))
-        for col, frame in zip(cols, cap["frames"]):
-            col.image(frame, use_container_width=True)
+    if cap.get("frames_analysed"):
+        st.markdown(f"🔒 **{cap['frames_analysed']} video frames were analysed and then deleted.** "
+                    "Only the emotion scores below were kept.")
     if cap["transcript"]:
-        st.markdown(f"**Words heard:** “{cap['transcript']}”")
-    elif cap["frames"]:
+        st.markdown("**Words heard:**")
+        st.markdown(plain_text_html(cap["transcript"], "“", "”"), unsafe_allow_html=True)
+    elif cap.get("frames_analysed"):
         st.caption("No words were recognised in the recording, so the estimate relies on facial expression.")
     rows = {}
     if cap["face_scores"]:
@@ -406,7 +437,7 @@ def render_chat_capture(cap, key):
     rows["Fused"] = cap["fused"]
     comp = pd.DataFrame(rows).reindex(EMOTIONS).fillna(0.0)
     st.markdown("**What each signal suggested**")
-    st.bar_chart(comp)
+    st.bar_chart(comp, stack=False)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Leading emotion", max(cap["fused"], key=cap["fused"].get).title())
     c2.metric("Voice arousal", f'{cap["arousal"]:.2f}')
@@ -424,7 +455,6 @@ def log_conversation(source, user_text, emotion_scores, strategy, reply):
         "id": len(st.session_state.convo_log) + 1,
         "title": make_title(user_text),
         "source": source,
-        "user_text": user_text,
         "emotion": top,
         "emotion_score": float(emotion_scores[top]),
         "strategy": strategy,
@@ -508,8 +538,15 @@ if st.session_state.view == "Chat":
           <div class="neo-topbar-sub">Tell me how your day went — I'll listen to your words, voice and expression.</div></div>
         </div>""", unsafe_allow_html=True)
     with top_right:
-        if st.session_state.messages and st.button("New chat", use_container_width=True, type="secondary"):
+        if st.session_state.get("messages") and st.button("New chat", use_container_width=True, type="secondary"):
             st.session_state.messages = []
+            st.rerun()
+        if st.button("🗑️ Delete my data", use_container_width=True, type="secondary",
+                     help="Deletes your messages, transcripts, analysis results and any recording in progress. "
+                          "Learned reply preferences (numbers only) are kept."):
+            wipe_personal_data()
+            init_state()
+            st.toast("🔒 Your messages and recordings were deleted.")
             st.rerun()
 
     video_col, chat_col = st.columns([2, 3], gap="large")
@@ -547,31 +584,41 @@ if st.session_state.view == "Chat":
         if has_capture and not recording and not just_stopped:
             send_clicked = st.button("💬 Reply to my recording", type="primary", use_container_width=True)
         send_clicked = send_clicked or (just_stopped and has_capture)
-        st.caption("Camera and mic stay in this session only. Record only yourself or people who agreed.")
+        st.caption("🔒 Your video and audio are analysed in memory and deleted straight after — never saved. "
+                   "Record only yourself or people who agreed.")
 
         if send_clicked:
-            with st.spinner("Listening to what you said… 🎧"):
-                visual_results = [visual_features(frame) for frame in captured_frames]
-                face_detected = any(result[1] < 1.0 for result in visual_results)
-                face_score_sets, notes = [], list(dict.fromkeys(n for r in visual_results for n in r[2]))
-                for frame in captured_frames:
-                    frame_scores, frame_notes = infer_facial_emotion(frame)
-                    if frame_scores:
-                        face_score_sets.append(frame_scores)
-                    notes.extend(n for n in frame_notes if n not in notes)
-                face_scores = average_emotion_scores(face_score_sets)
-                arousal, transcript, text_scores = 0.0, "", None
-                if captured_audio:
-                    arousal, audio_notes = audio_features(captured_audio)
-                    transcript, speech_notes = transcribe_audio(captured_audio)
-                    notes += speech_notes + audio_notes
-                    if transcript:
-                        text_scores, text_notes = infer_text_emotion(transcript)
-                        notes += text_notes
-                else:
-                    notes.append("No microphone audio was captured.")
-                respond(transcript, text_scores, face_scores, arousal, face_detected, notes, frames=captured_frames)
-            capture_buffer.clear()
+            try:
+                with st.spinner("Listening to what you said… 🎧"):
+                    visual_results = [visual_features(frame) for frame in captured_frames]
+                    face_detected = any(result[1] < 1.0 for result in visual_results)
+                    face_score_sets, notes = [], list(dict.fromkeys(n for r in visual_results for n in r[2]))
+                    for frame in captured_frames:
+                        frame_scores, frame_notes = infer_facial_emotion(frame)
+                        if frame_scores:
+                            face_score_sets.append(frame_scores)
+                        notes.extend(n for n in frame_notes if n not in notes)
+                    face_scores = average_emotion_scores(face_score_sets)
+                    arousal, transcript, text_scores = 0.0, "", None
+                    if captured_audio:
+                        arousal, audio_notes = audio_features(captured_audio)
+                        transcript, speech_notes = transcribe_audio(captured_audio)
+                        notes += speech_notes + audio_notes
+                        if transcript:
+                            text_scores, text_notes = infer_text_emotion(transcript)
+                            notes += text_notes
+                    else:
+                        notes.append("No microphone audio was captured.")
+                    respond(transcript, text_scores, face_scores, arousal, face_detected, notes,
+                            frame_count=len(captured_frames))
+            except Exception as exc:
+                logging.getLogger("neuroendo").exception("Chat analysis failed: %s", type(exc).__name__)
+                st.session_state["_flash_error"] = ("Sorry — something went wrong analysing that recording. "
+                                                    "It has been deleted; please try again.")
+            finally:
+                # Privacy: the recording is deleted as soon as it has been analysed (or if analysis fails).
+                capture_buffer.wipe()
+                captured_frames = captured_audio = None
             st.rerun()
 
     with chat_col:
@@ -582,17 +629,20 @@ if st.session_state.view == "Chat":
                 with st.chat_message("assistant", avatar="🧠"):
                     st.markdown("Hi there! 💗 I'm **NEUROENDO**. Press **START** on the camera and tell me about "
                                 "your day — or just type below. I'll pick up on how you're feeling and reply.")
-            for msg in st.session_state.messages:
+            for msg in st.session_state.get("messages", []):
                 if msg["role"] == "user":
                     with st.chat_message("user", avatar="🧑"):
-                        st.markdown(msg["text"])
+                        if msg.get("plain"):
+                            st.markdown(plain_text_html(msg["text"]), unsafe_allow_html=True)
+                        else:
+                            st.markdown(msg["text"])
                         st.markdown(f'<span class="neo-chip">{EMOTION_ART.get(msg["emotion"], "💗")} sensing {msg["emotion"]}</span>',
                                     unsafe_allow_html=True)
                 else:
                     with st.chat_message("assistant", avatar="🧠"):
                         st.markdown(msg["text"])
 
-        last = st.session_state.messages[-1] if st.session_state.messages else None
+        last = st.session_state.messages[-1] if st.session_state.get("messages") else None
         if last and last["role"] == "assistant" and not last["rated"]:
             fb1, fb2, _ = st.columns([1.5, 1.9, 1.1])
             with fb1:
@@ -620,11 +670,12 @@ if st.session_state.view == "Chat":
                         })
                         st.rerun()
 
-        typed = st.chat_input("Type a message…")
-        if typed and typed.strip():
+        typed = st.chat_input("Type a message…", max_chars=MAX_TEXT_CHARS)
+        typed = clean_text(typed)
+        if typed:
             with st.spinner("Thinking…"):
                 text_scores, text_notes = infer_text_emotion(typed)
-                respond(typed.strip(), text_scores, None, 0.4, False, text_notes, typed=True)
+                respond(typed, text_scores, None, 0.4, False, text_notes, typed=True)
             st.rerun()
 
     st.stop()  # Chat view ends here; the Emotional Learning site follows.
@@ -696,6 +747,7 @@ with st.sidebar:
     st.metric("Plasticity g(H)", f"{mod:.2f}×")
     st.caption("g(H) = clip(1 + 2S − D, 0.2, 2.0): stress speeds re-learning, sustained reward consolidates.")
     if st.button("Reset network, hormones and history", use_container_width=True):
+        wipe_personal_data(keep_learning=False)
         reset_state()
         st.rerun()
 
@@ -721,7 +773,9 @@ if st.session_state.active_page == "Emotion Studio":
 
     if mode == "Type a message":
         st.caption("Type how you're feeling. The text goes through the same emotion model used for transcribed speech.")
-        typed_text = st.text_area("Your message", "I got scolded at work today and I feel awful.", height=80)
+        typed_text = st.text_area("Your message", "I got scolded at work today and I feel awful.", height=80,
+                                  max_chars=MAX_TEXT_CHARS)
+        typed_text = clean_text(typed_text)
         typed_arousal = st.slider("How intense / energetic does this feel?", 0.0, 1.0, 0.4, 0.05,
                                   help="Stands in for the acoustic arousal cue that a voice recording would provide.")
         if st.button("Analyze message", type="primary"):
@@ -733,7 +787,7 @@ if st.session_state.active_page == "Emotion Studio":
             uncertainty = max(0.0, uncertainty - 0.2)  # typed input: no face expected, don't penalise it
             st.session_state.emotion_scores = combined
             st.session_state.emotion_notes = text_notes
-            st.session_state.transcript = typed_text.strip()
+            st.session_state.transcript = typed_text
             st.session_state.last_features = {"emotion_scores": combined, "arousal": typed_arousal, "uncertainty": uncertainty}
             st.session_state.last_notes = [f"Typed message with intensity {typed_arousal:.2f}."]
             st.session_state.emotion_source = "typed in Emotion Studio"
@@ -782,7 +836,7 @@ if st.session_state.active_page == "Emotion Studio":
         with action_col2:
             clear_recording = st.button("Clear recording")
         if clear_recording:
-            capture_buffer.clear()
+            capture_buffer.wipe()
             st.session_state.last_features = None
             st.session_state.emotion_scores = None
             st.session_state.transcript = ""
@@ -792,6 +846,7 @@ if st.session_state.active_page == "Emotion Studio":
             if not captured_frames:
                 st.warning("No video frames were captured. Start recording, allow camera access, record for a few seconds, and stop.")
             else:
+              try:
                 with st.spinner("Analyzing recorded face and microphone inputs…"):
                     visual_results = [visual_features(frame) for frame in captured_frames]
                     face_detected = any(result[1] < 1.0 for result in visual_results)
@@ -809,6 +864,7 @@ if st.session_state.active_page == "Emotion Studio":
                     if captured_audio:
                         audio_cue, anot = audio_features(captured_audio)
                         transcript, speech_notes = transcribe_audio(captured_audio)
+                        transcript = clean_text(transcript)
                         st.session_state.transcript = transcript
                         text_scores, text_notes = infer_text_emotion(transcript) if transcript else (None, [])
                         if transcript:
@@ -823,11 +879,19 @@ if st.session_state.active_page == "Emotion Studio":
                     st.session_state.emotion_source = "recorded webcam frames + microphone audio"
                     st.session_state.current_log_id = None
                     st.session_state.last_features = {"emotion_scores": combined, "arousal": audio_cue, "uncertainty": uncertainty}
-                    st.session_state.last_notes = vnotes + anot
+                    st.session_state.last_notes = vnotes + anot + [
+                        f"🔒 {len(captured_frames)} video frames and the audio were deleted after analysis."]
                     st.session_state.feedback_done = False
                     st.session_state.reply_variant += 1
-                    st.success("Recording analyzed. Review the detected cues and transcript below.")
-                    st.rerun()
+              except Exception as exc:
+                logging.getLogger("neuroendo").exception("Studio analysis failed: %s", type(exc).__name__)
+                st.session_state["_flash_error"] = ("Sorry — something went wrong analysing that recording. "
+                                                    "It has been deleted; please try again.")
+              finally:
+                # Privacy: delete the recording as soon as it has been analysed (or if analysis fails).
+                capture_buffer.wipe()
+                captured_frames = captured_audio = None
+              st.rerun()
 
 
     current = st.session_state.last_features
@@ -879,7 +943,7 @@ if st.session_state.active_page == "Emotion Studio":
 
         if st.session_state.transcript:
             st.markdown("#### What you said")
-            st.write(st.session_state.transcript)
+            st.markdown(plain_text_html(st.session_state.transcript), unsafe_allow_html=True)
             st.caption("Check the transcript for speech-recognition mistakes; errors can affect the emotion estimate.")
 
         if st.session_state.emotion_scores:
@@ -969,6 +1033,7 @@ if st.session_state.active_page == "Model Insights":
     with e4:
         st.caption("g(H) = clip(1 + 2S − D, 0.2, 2.0). Stress speeds re-learning; sustained reward consolidates. High S also biases replies toward Supportive / Calming / De-escalating.")
         if st.button("Reset network, hormones & chat", use_container_width=True):
+            wipe_personal_data(keep_learning=False)
             reset_state()
             st.rerun()
 
@@ -976,12 +1041,11 @@ if st.session_state.active_page == "Model Insights":
     if st.session_state.get("last_features"):
         lf = st.session_state.last_features
         cap = st.session_state.get("chat_capture")
-        if cap and cap["frames"] and st.session_state.get("emotion_source") == cap["source"]:
-            st.markdown("**Video frames from the Chat recording**")
-            for col, frame in zip(st.columns(len(cap["frames"])), cap["frames"]):
-                col.image(frame, use_container_width=True)
-        if st.session_state.transcript:
-            st.markdown(f"**Words:** “{st.session_state.transcript}”")
+        if cap and cap.get("frames_analysed") and st.session_state.get("emotion_source") == cap["source"]:
+            st.caption(f"🔒 {cap['frames_analysed']} video frames were analysed and then deleted.")
+        if st.session_state.get("transcript"):
+            st.markdown("**Words:**")
+            st.markdown(plain_text_html(st.session_state.transcript, "“", "”"), unsafe_allow_html=True)
         m1, m2, m3 = st.columns(3)
         m1.metric("Leading emotion", max(lf["emotion_scores"], key=lf["emotion_scores"].get).title())
         m2.metric("Arousal", f'{lf["arousal"]:.2f}')
@@ -1026,7 +1090,7 @@ if st.session_state.active_page == "Model Insights":
             st.markdown("How often replies were accepted")
             st.line_chart(hist.set_index("Interaction")[["Acceptance (rolling 5)"]])
     else:
-        st.info("No learning updates yet. On the Chat page, press 👍 or \"Reply differently\" under a reply.")
+        st.info("No learning updates yet. On the Chat page, press 👍 Nice reply or 👎 Wrong reply under a reply.")
 
     with st.expander("Model equations and limitations"):
         st.markdown(r"""
@@ -1034,8 +1098,9 @@ if st.session_state.active_page == "Model Insights":
 
 **Reply choice.** \(s = xW + b(S)\), where \(b\) adds \(0.15S\) to Supportive, Calming and De-escalating. Strategy \(=\arg\max s\); \(p=\mathrm{softmax}(3s)\).
 
-**Three-factor Hebbian update with anti-Hebbian term.**
+**Three-factor Hebbian update with anti-Hebbian term and wrong-reply penalty.**
 \[ \Delta W = \eta\, g(H)\, x\,(y - p)^T,\qquad \eta = 0.25 \]
+When you reject a reply, its column also gets \(\Delta W_{:,\,wrong} \mathrel{-}= 0.5\,\eta\, g(H)\, x\), so wrong answers earn negative weights.
 \(x y^T\) strengthens the link to the reply you wanted; \(-x p^T\) weakens links to replies the network over-favours, so weights can go negative.
 
 **Endocrine system.** Leaky states (rate 0.25):
@@ -1051,7 +1116,7 @@ if st.session_state.active_page == "Last 5 Conversations":
     st.markdown('<div class="neo-section"><span class="neo-number">01</span><span class="neo-heading">Last 5 conversations</span><span class="neo-kicker">Reply &amp; learning</span></div>', unsafe_allow_html=True)
     st.write("What each conversation was about, how NEUROENDO replied, your feedback, and what it learned. "
              "A rejected reply gets negative weight on the links that chose it.")
-    log = st.session_state.convo_log[-5:][::-1]
+    log = st.session_state.get("convo_log", [])[-5:][::-1]
     if not log:
         st.info("No conversations yet. Talk or type on the Chat page, then come back here.")
 
@@ -1069,12 +1134,12 @@ if st.session_state.active_page == "Last 5 Conversations":
         html = (
             '<div class="neo-insight-card" style="margin-bottom:.75rem;padding:.85rem 1rem;">'
             '<div style="display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;">'
-            f'<div style="font-size:1.05rem;font-weight:850;color:#432A38;">#{entry["id"]} · {entry.get("title", "")}</div>'
+            f'<div style="font-size:1.05rem;font-weight:850;color:#432A38;">#{entry["id"]} · {esc_html(entry.get("title", ""))}</div>'
             f'<span style="font-size:.78rem;font-weight:750;padding:.2rem .6rem;border-radius:99px;'
             f'color:{badge[1]};background:{badge[2]};">{badge[0]}</span></div>'
             f'<div style="font-size:.88rem;color:#5A3A4B;margin-top:.3rem;">{emoji} Sensed <b>{entry["emotion"]}</b> '
             f'({entry["emotion_score"]:.0%}) → replied <b>{entry["strategy"]}</b>'
-            f'<span style="color:#806A76;"> · {entry["source"]}</span></div>'
+            f'<span style="color:#806A76;"> · {esc_html(entry["source"])}</span></div>'
         )
         if status != "waiting":
             ups = _links(entry["ups"], "#2E7D5B", "▲")

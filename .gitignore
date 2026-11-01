@@ -1,0 +1,16 @@
+# Secrets — never commit these
+.streamlit/secrets.toml
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Audio/video recordings should never end up in the repo
+*.wav
+*.mp4
+*.webm

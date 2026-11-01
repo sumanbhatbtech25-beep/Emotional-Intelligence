@@ -1,0 +1,21 @@
+# Security-focused Streamlit settings for NEUROENDO.
+
+[server]
+# Protect against cross-site request forgery and cross-origin requests.
+enableXsrfProtection = true
+enableCORS = true
+# The app never takes file uploads; keep the limit minimal.
+maxUploadSize = 1
+# Don't reload code from disk while serving.
+runOnSave = false
+fileWatcherType = "none"
+
+[client]
+# Never show stack traces or internal error details to visitors.
+showErrorDetails = "none"
+# Hide developer options (Rerun/Settings/Deploy) from visitors.
+toolbarMode = "viewer"
+
+[browser]
+# Don't send usage statistics to Streamlit.
+gatherUsageStats = false

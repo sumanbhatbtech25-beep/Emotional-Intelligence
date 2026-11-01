@@ -3,7 +3,39 @@ import io
 import re
 import numpy as np
 import streamlit as st
+import logging
+import threading
 from .learning import clip
+
+log = logging.getLogger("neuroendo")
+
+TEXT_MODEL = "j-hartmann/emotion-english-distilroberta-base"
+FACE_MODEL = "trpakov/vit-face-expression"
+
+
+@st.cache_resource(show_spinner="Loading an AI model (first time only)…")
+def _load_pipeline(task, model):
+    """Load a pretrained pipeline ONCE per server and share it across sessions.
+
+    Models hold no user data, so sharing them is safe; loading one copy per
+    visitor would exhaust memory. A failed load is cached as None so the app
+    doesn't retry the download on every frame. Returns (pipeline_or_None, lock).
+    """
+    try:
+        from transformers import pipeline
+        kwargs = {"top_k": None} if task == "text-classification" else {}
+        return pipeline(task, model=model, **kwargs), threading.Lock()
+    except Exception as exc:  # network/model problems: log details server-side only
+        log.warning("Could not load %s (%s): %s", model, task, type(exc).__name__)
+        return None, threading.Lock()
+
+
+def _run(task, model, *args, **kwargs):
+    pipe, lock = _load_pipeline(task, model)
+    if pipe is None:
+        raise RuntimeError("model unavailable")
+    with lock:  # pipelines are not guaranteed thread-safe across sessions
+        return pipe(*args, **kwargs)
 
 EMOTION_LABELS = ["sadness", "anger", "fear", "joy", "surprise", "neutral"]
 
@@ -11,7 +43,8 @@ TEXT_CUES = {
     "sadness": {
         "words": ["sad", "upset", "hurt", "cry", "crying", "lonely", "disappointed",
                   "embarrassed", "ashamed", "guilty", "miserable", "heartbroken",
-                  "depressed", "down", "unhappy", "scolded", "rejected", "ignored", "failed"],
+                  "depressed", "down", "unhappy", "scolded", "rejected", "ignored", "failed",
+                  "died", "funeral", "grieving"],
         "phrases": ["got scolded", "was scolded", "got yelled at", "i feel bad",
                     "feel terrible", "made me cry", "i got in trouble", "feel awful"]
     },
@@ -39,13 +72,19 @@ TEXT_CUES = {
 
 def classify_text_fallback(text):
     """Explainable keyword fallback; not a trained model."""
-    cleaned = re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower())
+    cleaned = re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower().replace("’", "'"))
+    # Phrases that contain a misleading cue word.
+    cleaned = re.sub(r"\bpassed away\b", " died ", cleaned)
     scores = {label: 0.0 for label in EMOTION_LABELS}
     evidence = {label: [] for label in EMOTION_LABELS}
-    tokens = set(cleaned.split())
+    words = cleaned.split()
+    negators = {"not", "no", "never", "don't", "dont", "didn't", "didnt", "isn't", "wasn't", "aren't",
+                "haven't", "hasn't", "can't", "cannot", "couldn't", "won't", "hardly"}
+    # A cue word right after a negation ("not happy") doesn't count for that emotion.
+    tokens = {w for i, w in enumerate(words) if not negators.intersection(words[max(0, i - 2):i])}
     for emotion, cues in TEXT_CUES.items():
         for phrase in cues["phrases"]:
-            if phrase in cleaned:
+            if re.search(rf"\b{re.escape(phrase)}\b", cleaned):
                 scores[emotion] += 2.0
                 evidence[emotion].append(phrase)
         for word in cues["words"]:
@@ -129,28 +168,17 @@ def transcribe_audio(audio_bytes):
             return "", ["The recording was silent or too short to transcribe."]
 
         model_name = _whisper_model_name()
-        if st.session_state.get("speech_model_name") != model_name:
-            with st.spinner("Loading the speech-recognition model (first time only)…"):
-                st.session_state.speech_recognition_pipeline = pipeline(
-                    "automatic-speech-recognition", model=model_name
-                )
-                st.session_state.speech_model_name = model_name
-
-        result = st.session_state.speech_recognition_pipeline(
-            {"raw": speech, "sampling_rate": sr},
-            chunk_length_s=30,
-            generate_kwargs={"num_beams": 3},
-        )
+        result = _run("automatic-speech-recognition", model_name,
+                      {"raw": speech, "sampling_rate": sr},
+                      chunk_length_s=30, generate_kwargs={"num_beams": 3})
         transcript = " ".join(str(result.get("text", "")).split())
         # Whisper sometimes "hears" stock phrases in near-silence.
         if transcript.lower().strip(" .!") in {"", "you", "thank you", "thanks for watching", "bye"}:
             return "", ["No clear speech was detected in the recording."]
         return transcript, [f"Speech transcribed with {model_name.split('/')[-1]} ({seconds:.1f}s of audio after cleanup)."]
     except Exception as exc:
-        return "", [
-            "Automatic speech transcription is unavailable, so spoken-word emotion analysis was skipped.",
-            f"Speech-to-text error: {type(exc).__name__}: {exc}"[:200],
-        ]
+        log.warning("Speech transcription failed: %s", type(exc).__name__)
+        return "", ["Speech recognition is unavailable right now, so spoken words were not analysed."]
 
 
 def infer_text_emotion(text):
@@ -158,15 +186,7 @@ def infer_text_emotion(text):
     if not text or not text.strip():
         return None, ["No text description provided."]
     try:
-        from transformers import pipeline
-        if "text_emotion_pipeline" not in st.session_state:
-            with st.spinner("Loading the text emotion model for first use..."):
-                st.session_state.text_emotion_pipeline = pipeline(
-                    "text-classification",
-                    model="j-hartmann/emotion-english-distilroberta-base",
-                    top_k=None
-                )
-        output = st.session_state.text_emotion_pipeline(text[:2000])[0]
+        output = _run("text-classification", TEXT_MODEL, text[:2000])[0]
         scores = {label: 0.0 for label in EMOTION_LABELS}
         for item in output:
             label = str(item["label"]).lower()
@@ -180,22 +200,17 @@ def infer_text_emotion(text):
             "Text analyzed with a pretrained English emotion classifier."
         ]
     except Exception as exc:
+        log.info("Text emotion model unavailable (%s); using keyword fallback", type(exc).__name__)
         scores, notes = classify_text_fallback(text)
-        notes.append(f"Pretrained text model unavailable ({type(exc).__name__}); keyword fallback used.")
+        notes.append("Pretrained text model unavailable; keyword fallback used.")
         return scores, notes
 
 def infer_facial_emotion(image_bytes):
     """Run a pretrained facial-expression model, or clearly mark it unavailable."""
     try:
         from PIL import Image
-        from transformers import pipeline
-        if "face_emotion_pipeline" not in st.session_state:
-            with st.spinner("Loading the facial-expression model for first use..."):
-                st.session_state.face_emotion_pipeline = pipeline(
-                    "image-classification", model="trpakov/vit-face-expression"
-                )
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        output = st.session_state.face_emotion_pipeline(image)
+        output = _run("image-classification", FACE_MODEL, image)
         scores = {label: 0.0 for label in EMOTION_LABELS}
         for item in output:
             label = str(item["label"]).lower()
@@ -211,10 +226,8 @@ def infer_facial_emotion(image_bytes):
             "Facial-expression model estimates visible expression, not internal emotion with certainty."
         ]
     except Exception as exc:
-        return None, [
-            "Facial-expression model unavailable; the basic smile detector cannot reliably detect sadness.",
-            f"Model error: {type(exc).__name__}. Text analysis is still available."
-        ]
+        log.info("Facial-expression model unavailable: %s", type(exc).__name__)
+        return None, ["Facial-expression model unavailable; the estimate relies on words and voice."]
 
 def apply_event_hint(text_scores, text, weight=0.6):
     """Blend in the emotion carried by a recognised life event ("I passed my test" -> joy).
@@ -305,7 +318,8 @@ def visual_features(image_bytes):
             "Smile-like visual cue detected." if smile_cue else "No clear smile-like cue detected."
         ]
     except Exception as e:
-        return 0.0, 1.0, [f"Visual feature extraction unavailable: {e}"]
+        log.info("Visual feature extraction failed: %s", type(e).__name__)
+        return 0.0, 1.0, ["Visual feature extraction unavailable."]
 
 def audio_features(audio_bytes):
     """Estimate audio arousal from simple signal features. This is not emotion recognition."""
@@ -337,10 +351,8 @@ def audio_features(audio_bytes):
             "Audio arousal is a rough acoustic proxy; it does not identify a person's emotion."
         ]
     except Exception as e:
-        return 0.0, [
-            "Could not decode audio. Please use a WAV recording or use Demo mode.",
-            f"Details: {e}"
-        ]
+        log.info("Audio decoding failed: %s", type(e).__name__)
+        return 0.0, ["Could not decode the recorded audio."]
 
 def average_emotion_scores(score_sets):
     """Average emotion scores from sampled video frames."""

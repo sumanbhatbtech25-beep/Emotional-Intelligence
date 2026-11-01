@@ -4,9 +4,10 @@
 
 - **`app.py`** — Streamlit entry point with two views switched from the top-right corner: **Chat** (live camera + conversation + feedback) and **Emotional Learning** (Emotion Studio, Model Insights, A/B Experiment, endocrine controller). Both share one network and endocrine state.
 - **`neuroendo/learning.py`** — builds the feature vector from emotion scores, the Hebbian/anti-Hebbian network, the artificial endocrine system (D, S, plasticity, stress bias), reply templates, session state, and the simulated-user A/B experiment. Runs without Streamlit, so it can be tested on its own.
+- **`neuroendo/security.py`** — output escaping, wiping personal data, idle timeout, bounded history, and login throttling.
 - **`neuroendo/replies.py`** — recognises life events in what the user said and words the reply for the chosen strategy.
 - **`neuroendo/emotion.py`** — speech transcription, text and facial-expression inference, acoustic arousal, score fusion, and uncertainty estimation.
-- **`neuroendo/media.py`** — low-resolution webcam capture, microphone buffering (de-interleaving browser stereo audio correctly), video-frame sampling, and audio extraction.
+- **`neuroendo/media.py`** — memory-only webcam and microphone capture (de-interleaving browser stereo audio correctly), frames spread over the whole recording, and wiping the buffer after use.
 - **`requirements.txt`** — runtime dependencies.
 
 ## Data flow
@@ -21,7 +22,7 @@
 
 ## State and persistence
 
-The learned matrix, endocrine state and interaction history are stored in Streamlit session state. They are reused by later rounds in the same session but are not written to a persistent database or file. The pretrained text, face, and speech models are inference models; the feedback action does not fine-tune their parameters.
+Raw video frames and audio exist only in a per-session memory buffer, and are wiped as soon as a recording has been analysed (or if analysis fails). The learned matrix, endocrine state, conversation log (short titles) and transcripts are kept in Streamlit session state. They are never written to disk or a database, are deleted by **Delete my data**, logout, or 30 minutes of inactivity, and disappear when the session ends. The pretrained text, face and speech models are loaded once per server and shared between sessions; they hold no user data, and feedback never fine-tunes them.
 
 ## Performance choices
 

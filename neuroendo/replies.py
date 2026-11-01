@@ -17,6 +17,18 @@ _NOUN = r"(test|tests|exam|exams|paper|quiz|interview|course|class|semester|driv
 # match the "got ... internship" (new job) pattern.
 EVENTS = [
     {
+        "key": "loss",
+        "emotion": "sadness",
+        "patterns": [r"\b(passed away|died|funeral|no longer with us)\b",
+                     r"\blost my\s+(mom|mum|mother|dad|father|grand(ma|mother|pa|father)|brother|sister|"
+                     r"friend|best friend|dog|cat|pet|husband|wife|son|daughter|uncle|aunt|cousin|baby)\b"],
+        "replies": {
+            "Supportive": "I'm so, so sorry for your loss 💗 Please take all the time you need. Would you like to tell me about them?",
+            "Calming": "I'm really sorry. Grief can be overwhelming — there's no right way to feel. I'm here with you.",
+            "Neutral": "I'm very sorry for your loss. I'm here if you'd like to talk.",
+        },
+    },
+    {
         "key": "failed",
         "emotion": "sadness",
         "patterns": [rf"\b(failed|flunked|didn'?t pass|did not pass|bombed|messed up)\b(?:\s+\w+){{0,3}}\s+{_NOUN}",
@@ -31,7 +43,9 @@ EVENTS = [
     {
         "key": "rejected",
         "emotion": "sadness",
-        "patterns": [r"\b(got\s+)?rejected\b", r"\b(didn'?t|did not)\s+get\s+(the\s+)?(job|offer|internship|admission|selected)\b"],
+        "patterns": [r"\b(got\s+)?rejected\b",
+                     r"\b(didn'?t|did not|never|couldn'?t)\s+(get|got)\b.*\b(job|offer|internship|admission|placement|selected)\b",
+                     r"\b(not|wasn'?t|weren'?t|isn'?t)\s+(selected|accepted|hired|chosen|shortlisted|placed)\b"],
         "replies": {
             "Supportive": "I'm so sorry — rejection really stings 💗 It says nothing about your worth. Do you want to talk it through?",
             "Calming": "That's disappointing, and it's okay to feel it. Let's take it one step at a time — what would help most right now?",
@@ -76,7 +90,7 @@ EVENTS = [
     {
         "key": "won",
         "emotion": "joy",
-        "patterns": [r"\b(we|i)\s+won\b", r"\b(won|first place|first prize|gold medal|champion)\b"],
+        "patterns": [r"\b(we|i|our team)\s+won\b(?!')", r"\b(won|first place|first prize|gold medal|champions?)\b(?!')"],
         "replies": {
             "Upbeat": "Yesss, you won! 🏆 That's brilliant — congratulations! How did it feel in that moment?",
             "Curious": "You won?! 🏆 Amazing! Tell me how it went!",
@@ -108,16 +122,6 @@ EVENTS = [
         "replies": {
             "Supportive": "I'm so sorry 💗 That's really painful. Be gentle with yourself — I'm here if you want to talk about it.",
             "Calming": "That's a lot to carry. It's okay to not be okay right now. What do you need most at the moment?",
-        },
-    },
-    {
-        "key": "loss",
-        "emotion": "sadness",
-        "patterns": [r"\b(passed away|died|lost my|funeral)\b"],
-        "replies": {
-            "Supportive": "I'm so, so sorry for your loss 💗 Please take all the time you need. Would you like to tell me about them?",
-            "Calming": "I'm really sorry. Grief can be overwhelming — there's no right way to feel. I'm here with you.",
-            "Neutral": "I'm very sorry for your loss. I'm here if you'd like to talk.",
         },
     },
     {
@@ -153,21 +157,51 @@ EVENTS = [
 ]
 
 
+_NEGATION = re.compile(r"\b(not|no|never|didn'?t|did not|haven'?t|have not|hasn'?t|hadn'?t|couldn'?t|"
+                       r"can'?t|cannot|won'?t|wasn'?t|weren'?t|isn'?t|aren'?t|yet to)\b")
+# A negated good event is the matching bad event ("haven't passed" -> failed).
+_NEGATED_AS = {"passed": "failed", "new_job": "rejected", "promotion": None, "won": None, "celebration": None}
+
+
+def _event_by_key(key):
+    return next((e for e in EVENTS if e["key"] == key), None)
+
+
+def _thing_for(event, cleaned):
+    if event["key"] == "new_job":
+        m = re.search(r"\b(job|offer|internship|placement|admission)\b", cleaned)
+        return m.group(0) if m else "job"
+    noun = re.search(_NOUN, cleaned)
+    return noun.group(0) if noun else ""
+
+
 def detect_event(text):
-    """Return (event, thing) for the first life event mentioned in text, else (None, None)."""
-    cleaned = " ".join((text or "").lower().split())
+    """Return (event, thing) for the first life event mentioned in text, else (None, None).
+
+    Sad events are checked before happy ones ("passed away" is not "passed a
+    test"), and a negation just before a happy event flips or cancels it
+    ("I haven't passed" -> failed, "I won't" -> nothing).
+    """
+    cleaned = " ".join((text or "").lower().replace("’", "'").split())
     if not cleaned:
         return None, None
     for event in EVENTS:
         for pattern in event["patterns"]:
             match = re.search(pattern, cleaned)
-            if match:
-                noun = re.search(_NOUN, cleaned)
-                thing = noun.group(0) if noun else ""
-                if event["key"] in ("new_job",):
-                    m = re.search(r"\b(job|offer|internship|placement|admission)\b", cleaned)
-                    thing = m.group(0) if m else "job"
-                return event, thing
+            if not match:
+                continue
+            if event["key"] in _NEGATED_AS:
+                before = " ".join(cleaned[: match.start()].split()[-4:])
+                # Excitement, not negation: "I can't believe I passed", "not only did we win".
+                before = re.sub(r"\b(can'?t|cannot|couldn'?t) believe\b|\bnot only\b", " ", before)
+                inside = cleaned[match.start(): match.end()]
+                if _NEGATION.search(before) or _NEGATION.search(inside):
+                    flipped = _NEGATED_AS[event["key"]]
+                    if flipped:
+                        flip_event = _event_by_key(flipped)
+                        return flip_event, _thing_for(flip_event, cleaned)
+                    break   # negated, no opposite: try the next event type
+            return event, _thing_for(event, cleaned)
     return None, None
 
 
