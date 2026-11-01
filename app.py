@@ -11,13 +11,28 @@ from neuroendo.emotion import (
     transcribe_audio, infer_text_emotion, infer_facial_emotion, combine_emotion_scores,
     visual_features, audio_features, average_emotion_scores, estimate_uncertainty, apply_event_hint,
 )
-from neuroendo.media import LiveCaptureBuffer, WebcamVideoProcessor, MicrophoneAudioProcessor, webrtc_streamer, WebRtcMode, RTCConfiguration
+from neuroendo.media import LiveCaptureBuffer, WebcamVideoProcessor, MicrophoneAudioProcessor, webrtc_streamer, WebRtcMode
 from neuroendo.security import (
     MAX_TEXT_CHARS, IDLE_MINUTES, SESSION_MAX_HOURS, esc_html, plain_text_html, clean_text, wipe_personal_data,
     enforce_idle_timeout, cap_list, login_locked_for, check_password,
 )
 import logging
+import os
 import time
+
+
+# Camera/mic relay (TURN). Most home, college and mobile networks block direct
+# browser<->server video, so streamlit-webrtc needs TURN credentials. It reads
+# them from environment variables; copy them over from Streamlit secrets too.
+for _turn_key in ("HF_TOKEN", "CLOUDFLARE_TURN_KEY_ID", "CLOUDFLARE_TURN_KEY_API_TOKEN",
+                  "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"):
+    try:
+        if _turn_key not in os.environ and _turn_key in st.secrets:
+            os.environ[_turn_key] = str(st.secrets[_turn_key])
+    except Exception:
+        pass
+TURN_CONFIGURED = bool(os.environ.get("HF_TOKEN") or os.environ.get("CLOUDFLARE_TURN_KEY_ID")
+                       or os.environ.get("TWILIO_ACCOUNT_SID"))
 
 
 st.set_page_config(page_title="NEUROENDO", page_icon="🧠", layout="wide", initial_sidebar_state="auto")
@@ -270,12 +285,6 @@ def require_app_password():
     signed_in_at = st.session_state.get("authenticated_at")
     if st.session_state.get("authenticated", False) and signed_in_at and \
             time.time() - signed_in_at < SESSION_MAX_HOURS * 3600:
-        with st.sidebar:
-            if st.button("Log out"):
-                wipe_personal_data(keep_learning=False)
-                st.session_state["authenticated"] = False
-                st.session_state.pop("authenticated_at", None)
-                st.rerun()
         return
     if st.session_state.get("authenticated"):
         # Sign-in expired: drop the session's data before asking again.
@@ -302,6 +311,17 @@ def require_app_password():
     st.stop()
 
 require_app_password()
+
+
+def logout_button(key):
+    """Log-out control, shown only when the password gate is on."""
+    if not st.session_state.get("authenticated"):
+        return
+    if st.button("Log out", key=key, use_container_width=True, type="secondary"):
+        wipe_personal_data(keep_learning=False)
+        st.session_state["authenticated"] = False
+        st.session_state.pop("authenticated_at", None)
+        st.rerun()
 
 
 init_state()
@@ -513,10 +533,18 @@ def learn_from(message, target, accepted, new_reply=None):
     message["rated"] = True
 
 
-# ---- Top-right view switch: Chat (default) or the full Emotional Learning site ----
+# ---- Header row: title (Chat view) + the Chat / Emotional Learning switch, top-right ----
 if st.session_state.get("view") not in ("Chat", "Emotional Learning"):
     st.session_state.view = "Chat"
-_spacer, _nav_chat, _nav_learn = st.columns([5.2, 1.0, 1.7])
+_title_col, _nav_chat, _nav_learn = st.columns([5.2, 1.0, 1.7], vertical_alignment="center")
+with _title_col:
+    if st.session_state.view == "Chat":
+        st.markdown("""
+        <div class="neo-topbar">
+          <div class="neo-topbar-mark">🧠</div>
+          <div><div class="neo-topbar-title">NEUROENDO</div>
+          <div class="neo-topbar-sub">Tell me how your day went — I'll listen to your words, voice and expression.</div></div>
+        </div>""", unsafe_allow_html=True)
 with _nav_chat:
     if st.button("💬 Chat", key="view_chat", use_container_width=True,
                  type="primary" if st.session_state.view == "Chat" else "secondary"):
@@ -529,26 +557,6 @@ with _nav_learn:
         st.rerun()
 
 if st.session_state.view == "Chat":
-    top_left, top_right = st.columns([5, 1])
-    with top_left:
-        st.markdown("""
-        <div class="neo-topbar">
-          <div class="neo-topbar-mark">🧠</div>
-          <div><div class="neo-topbar-title">NEUROENDO</div>
-          <div class="neo-topbar-sub">Tell me how your day went — I'll listen to your words, voice and expression.</div></div>
-        </div>""", unsafe_allow_html=True)
-    with top_right:
-        if st.session_state.get("messages") and st.button("New chat", use_container_width=True, type="secondary"):
-            st.session_state.messages = []
-            st.rerun()
-        if st.button("🗑️ Delete my data", use_container_width=True, type="secondary",
-                     help="Deletes your messages, transcripts, analysis results and any recording in progress. "
-                          "Learned reply preferences (numbers only) are kept."):
-            wipe_personal_data()
-            init_state()
-            st.toast("🔒 Your messages and recordings were deleted.")
-            st.rerun()
-
     video_col, chat_col = st.columns([2, 3], gap="large")
 
     with video_col:
@@ -559,7 +567,6 @@ if st.session_state.view == "Chat":
         webrtc_ctx = webrtc_streamer(
             key="neuroendo-live-recorder",
             mode=WebRtcMode.SENDRECV,
-            rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}),
             media_stream_constraints={
                 "video": {"width": {"ideal": 480, "max": 640}, "height": {"ideal": 360, "max": 480}, "frameRate": {"ideal": 10, "max": 12}},
                 "audio": {"echoCancellation": True, "noiseSuppression": True, "autoGainControl": True},
@@ -568,6 +575,9 @@ if st.session_state.view == "Chat":
             audio_processor_factory=lambda: MicrophoneAudioProcessor(capture_buffer),
             async_processing=True,
         )
+        if not TURN_CONFIGURED:
+            st.caption("📶 Camera stuck on “Connection is taking longer than expected”? The app owner needs to add "
+                       "a free `HF_TOKEN` in the app's secrets (see README). Meanwhile you can type below.")
         captured_frames, captured_audio = capture_buffer.snapshot()
         recording = bool(webrtc_ctx.state.playing)
         # Auto-analyse the moment recording stops (playing -> stopped).
@@ -622,8 +632,28 @@ if st.session_state.view == "Chat":
             st.rerun()
 
     with chat_col:
-        st.markdown('<div class="neo-panel-title">💬 Conversation</div>', unsafe_allow_html=True)
-        chat_box = st.container(height=470, border=False)
+        _authed = bool(st.session_state.get("authenticated"))
+        _head, _new, _del, *_out = st.columns([1.6, 1.0, 1.5] + ([1.0] if _authed else []),
+                                              vertical_alignment="center")
+        with _head:
+            st.markdown('<div class="neo-panel-title" style="margin:0;">💬 Conversation</div>', unsafe_allow_html=True)
+        with _new:
+            if st.button("New chat", use_container_width=True, type="secondary",
+                         disabled=not st.session_state.get("messages")):
+                st.session_state.messages = []
+                st.rerun()
+        with _del:
+            if st.button("🗑️ Delete my data", use_container_width=True, type="secondary",
+                         help="Deletes your messages, transcripts, analysis results and any recording in progress. "
+                              "Learned reply preferences (numbers only) are kept."):
+                wipe_personal_data()
+                init_state()
+                st.toast("🔒 Your messages and recordings were deleted.")
+                st.rerun()
+        if _out:
+            with _out[0]:
+                logout_button("logout_chat")
+        chat_box = st.container(height=440, border=False)
         with chat_box:
             if not st.session_state.messages:
                 with st.chat_message("assistant", avatar="🧠"):
@@ -746,6 +776,7 @@ with st.sidebar:
     mod = endocrine_modulation(st.session_state.reward, st.session_state.stress)
     st.metric("Plasticity g(H)", f"{mod:.2f}×")
     st.caption("g(H) = clip(1 + 2S − D, 0.2, 2.0): stress speeds re-learning, sustained reward consolidates.")
+    logout_button("logout_learning")
     if st.button("Reset network, hormones and history", use_container_width=True):
         wipe_personal_data(keep_learning=False)
         reset_state()
@@ -811,7 +842,6 @@ if st.session_state.active_page == "Emotion Studio":
         webrtc_ctx = webrtc_streamer(
             key="neuroendo-studio-recorder",
             mode=WebRtcMode.SENDRECV,
-            rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}),
             media_stream_constraints={
                 "video": {"width": {"ideal": 480, "max": 640}, "height": {"ideal": 360, "max": 480}, "frameRate": {"ideal": 10, "max": 12}},
                 "audio": {"echoCancellation": True, "noiseSuppression": True, "autoGainControl": True},

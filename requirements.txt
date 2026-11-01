@@ -5,5 +5,5 @@ opencv-python-headless>=4.8,<5  # OpenCV 5 no longer bundles the Haar face casca
 scipy>=1.10
 transformers>=4.41,<5
 torch>=2.2,<3
-streamlit-webrtc>=0.47.9
+streamlit-webrtc>=0.60  # reads TURN credentials (HF_TOKEN etc.) automatically
 pillow>=10.0

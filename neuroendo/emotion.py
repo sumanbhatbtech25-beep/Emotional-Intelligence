@@ -70,6 +70,19 @@ TEXT_CUES = {
     }
 }
 
+def _cue_vocabulary():
+    return sorted({w for cues in TEXT_CUES.values() for w in cues["words"]})
+
+
+def _correct_typo(word):
+    """Map a likely misspelling onto a cue word ("exicted" -> "excited", "hapy" -> "happy")."""
+    import difflib
+    if len(word) < 4:
+        return word
+    match = difflib.get_close_matches(word, _cue_vocabulary(), n=1, cutoff=0.8)
+    return match[0] if match else word
+
+
 def classify_text_fallback(text):
     """Explainable keyword fallback; not a trained model."""
     cleaned = re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower().replace("’", "'"))
@@ -82,6 +95,7 @@ def classify_text_fallback(text):
                 "haven't", "hasn't", "can't", "cannot", "couldn't", "won't", "hardly"}
     # A cue word right after a negation ("not happy") doesn't count for that emotion.
     tokens = {w for i, w in enumerate(words) if not negators.intersection(words[max(0, i - 2):i])}
+    tokens |= {_correct_typo(w) for w in tokens}
     for emotion, cues in TEXT_CUES.items():
         for phrase in cues["phrases"]:
             if re.search(rf"\b{re.escape(phrase)}\b", cleaned):
@@ -186,7 +200,9 @@ def infer_text_emotion(text):
     if not text or not text.strip():
         return None, ["No text description provided."]
     try:
-        output = _run("text-classification", TEXT_MODEL, text[:2000])[0]
+        output = _run("text-classification", TEXT_MODEL, text[:2000])
+        if output and isinstance(output[0], list):   # [[{label, score}, ...]] for a single string
+            output = output[0]
         scores = {label: 0.0 for label in EMOTION_LABELS}
         for item in output:
             label = str(item["label"]).lower()

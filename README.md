@@ -146,6 +146,14 @@ streamlit run app.py
 2. Create an app from this repository and select `app.py`.
 3. Wait for dependencies and models to install; inspect the app logs if startup fails.
 
+**Make the live camera work (important).** Most home, college and mobile networks block direct video between your browser and the cloud server, so the camera hangs on *"Connection is taking longer than expected"*. The fix is a relay (TURN) server, and a free one comes with a Hugging Face account:
+
+1. Sign in at [huggingface.co](https://huggingface.co) → **Settings → Access Tokens → Create new token** (type **Read**).
+2. In Streamlit Cloud, open your app → **Settings → Secrets** and add `HF_TOKEN = "hf_..."`.
+3. Save. The app restarts, and the camera connects through the relay.
+
+Cloudflare or Twilio TURN credentials work too (see `.streamlit/secrets.toml.example`). Locally on `localhost` you usually don't need any of this.
+
 The browser will request camera and microphone permissions. Live recording may require HTTPS, which Streamlit Community Cloud provides. Model downloads can make the first analysis slow.
 
 ### Optional shared-password gate
