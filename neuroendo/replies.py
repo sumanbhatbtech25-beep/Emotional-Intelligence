@@ -13,7 +13,30 @@ import re
 # strategy. "{thing}" is filled with the matched noun (test, exam, job...).
 _NOUN = r"(test|tests|exam|exams|paper|quiz|interview|course|class|semester|driving test|boards|finals|viva|project|assignment)"
 
+# Negative events are checked first: "I got rejected from the internship" must not
+# match the "got ... internship" (new job) pattern.
 EVENTS = [
+    {
+        "key": "failed",
+        "emotion": "sadness",
+        "patterns": [rf"\b(failed|flunked|didn'?t pass|did not pass|bombed|messed up)\b(?:\s+\w+){{0,3}}\s+{_NOUN}",
+                     r"\b(failed|flunked)\b", r"\b(low|bad|poor)\s+(marks|grades?|score)\b"],
+        "replies": {
+            "Supportive": "I'm really sorry{the_thing_didnt} 💗 One result doesn't define you or how capable you are. Do you want to talk about what happened?",
+            "Calming": "That's a tough moment, and it's okay to feel upset. Take a breath — you can come back from this. What feels hardest right now?",
+            "Neutral": "I'm sorry to hear that. How are you feeling about it?",
+            "De-escalating": "It's completely understandable to be frustrated about that. Do you want to go over what felt unfair?",
+        },
+    },
+    {
+        "key": "rejected",
+        "emotion": "sadness",
+        "patterns": [r"\b(got\s+)?rejected\b", r"\b(didn'?t|did not)\s+get\s+(the\s+)?(job|offer|internship|admission|selected)\b"],
+        "replies": {
+            "Supportive": "I'm so sorry — rejection really stings 💗 It says nothing about your worth. Do you want to talk it through?",
+            "Calming": "That's disappointing, and it's okay to feel it. Let's take it one step at a time — what would help most right now?",
+        },
+    },
     {
         "key": "passed",
         "emotion": "joy",
@@ -66,27 +89,6 @@ EVENTS = [
         "replies": {
             "Upbeat": "Aww, that's wonderful! 🥳 Congratulations — I hope today feels as special as you are!",
             "Curious": "Oh, that's lovely! 🥳 What are your plans to celebrate?",
-        },
-    },
-    {
-        "key": "failed",
-        "emotion": "sadness",
-        "patterns": [rf"\b(failed|flunked|didn'?t pass|did not pass|bombed|messed up)\b(?:\s+\w+){{0,3}}\s+{_NOUN}",
-                     r"\b(failed|flunked)\b", r"\b(low|bad|poor)\s+(marks|grades?|score)\b"],
-        "replies": {
-            "Supportive": "I'm really sorry{the_thing_didnt} 💗 One result doesn't define you or how capable you are. Do you want to talk about what happened?",
-            "Calming": "That's a tough moment, and it's okay to feel upset. Take a breath — you can come back from this. What feels hardest right now?",
-            "Neutral": "I'm sorry to hear that. How are you feeling about it?",
-            "De-escalating": "It's completely understandable to be frustrated about that. Do you want to go over what felt unfair?",
-        },
-    },
-    {
-        "key": "rejected",
-        "emotion": "sadness",
-        "patterns": [r"\b(got\s+)?rejected\b", r"\b(didn'?t|did not)\s+get\s+(the\s+)?(job|offer|internship|admission|selected)\b"],
-        "replies": {
-            "Supportive": "I'm so sorry — rejection really stings 💗 It says nothing about your worth. Do you want to talk it through?",
-            "Calming": "That's disappointing, and it's okay to feel it. Let's take it one step at a time — what would help most right now?",
         },
     },
     {
@@ -210,3 +212,29 @@ def compose_reply(strategy, text="", variant=0, uncertainty=0.0):
                                                  the_thing_didnt=didnt)
     options = GENERIC[strategy]
     return options[variant % len(options)]
+
+
+# ----------------------------------------------------------------- titles
+EVENT_TITLES = {
+    "failed": "Failed {a_thing}", "rejected": "Got rejected", "passed": "Passed {a_thing}",
+    "new_job": "Got {a_thing}", "promotion": "Got promoted", "won": "Won something",
+    "celebration": "Celebrating", "scolded": "Got scolded", "breakup": "Break-up",
+    "loss": "Lost someone", "sick": "Feeling unwell", "upcoming": "Nervous about {a_thing}",
+    "argument": "Had an argument",
+}
+
+
+def make_title(text, max_words=6):
+    """Short title for a conversation: the life event if one is recognised, else the first few words."""
+    words = " ".join((text or "").split())
+    if not words:
+        return "Voice / video message (no words heard)"
+    event, thing = detect_event(words)
+    if event and event["key"] in EVENT_TITLES:
+        a_thing = f"a {thing}" if thing and thing[0] not in "aeiou" else (f"an {thing}" if thing else "it")
+        if event["key"] == "upcoming":
+            a_thing = f"an upcoming {thing}" if thing else "something coming up"
+        return EVENT_TITLES[event["key"]].format(a_thing=a_thing)
+    parts = words.rstrip(".!?").split()
+    title = " ".join(parts[:max_words])
+    return (title[0].upper() + title[1:]) + ("…" if len(parts) > max_words else "")

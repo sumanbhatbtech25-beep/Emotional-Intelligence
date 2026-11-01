@@ -26,6 +26,7 @@ Two buttons in the top-right corner switch between the views:
 | Workspace | Explore |
 |---|---|
 | **♡ Emotion Studio** | Type a message or record with camera + mic, see the emotion snapshot, reply strategy scores and architecture, then accept or correct the reply |
+| **☰ Last 5 Conversations** | A short title for each recent conversation (e.g. "Passed a test"), the emotion sensed → reply style, your feedback, and which weights went up or down |
 | **✧ Model Insights** | Learned weights (incl. negative anti-Hebbian links), reward/stress/plasticity history, acceptance rate |
 | **⇄ A/B Experiment** | Plain vs endocrine-modulated learning with simulated users whose preferences change |
 
@@ -34,7 +35,7 @@ Two buttons in the top-right corner switch between the views:
 1. Press **START** on the camera and allow camera + microphone access.
 2. Tell NEUROENDO about your day (e.g. *"I passed my test today!"*), then press **STOP**.
 3. Analysis starts automatically. Your words appear in the chat with the emotion it sensed, followed by a reply, e.g. *"Hurray! 🎉 You passed your test — you've done great!"*
-4. Press **👍 Nice reply**, or **🙈 Reply differently** to pick a better tone. It answers again in that tone and learns your preference.
+4. Press **👍 Nice reply**, or **👎 Wrong reply** to pick a better tone. It answers again in that tone and learns your preference.
 
 You can also just type in the message box. Chat and Emotional Learning share the same network and endocrine state, so feedback in either one shows up in Model Insights.
 
@@ -82,13 +83,14 @@ Microphone ─────► Whisper speech-to-text ─► text-emotion model �
 
 **2. Choosing a reply.** The feature vector `x = [6 emotion scores, arousal, uncertainty]` is multiplied by the weight matrix `W` (8 inputs × 6 reply strategies). `W` starts from a weak default pairing (sadness→Supportive, anger→De-escalating, fear→Calming, joy→Upbeat, surprise→Curious, neutral/uncertain→Neutral), so replies make sense before any training. The winning strategy is turned into words by `replies.py`. If you mention a recognised life event, the reply is about that event, in the chosen tone. A recognised event also nudges the emotion scores toward its usual emotion (e.g. "I passed" → joy), in case the text model reads it as neutral.
 
-**3. Learning from feedback** — a three-factor Hebbian rule with an anti-Hebbian term:
+**3. Learning from feedback** — a three-factor Hebbian rule with an anti-Hebbian term, plus an explicit penalty for wrong replies:
 
 ```text
-ΔW = η · g(H) · x (y − p)ᵀ        η = 0.25,  p = softmax(3 · x·W)
+ΔW = η · g(H) · x (y − p)ᵀ                          η = 0.25,  p = softmax(3 · x·W)
+ΔW[:, wrong] −= η · g(H) · 0.5 · x                  only when you reject a reply
 ```
 
-`x yᵀ` strengthens the link to the reply you wanted. `−x pᵀ` weakens links to replies the network over-favours, so wrong associations fade and weights can become negative.
+`x yᵀ` strengthens the link to the reply you wanted. `−x pᵀ` weakens links to replies the network over-favours, so wrong associations fade. A rejected reply also gets the direct penalty, so the links that chose it go down, and below zero if they had little support. Only replies you give feedback on are learned from; messages with no feedback change nothing.
 
 **4. Artificial endocrine system.** Two leaky hormone-like states:
 
@@ -109,11 +111,11 @@ With 20 simulated users × 240 interactions, preferences that differ from the de
 
 | Variant | Accuracy | After preference change |
 |---|---|---|
-| A · plain Hebbian (η = 0.25) | 69.2% | 45.2% |
-| **B · endocrine-modulated (η = 0.25)** | **71.5%** (better for 20/20 users) | **48.6%** |
-| Plain, best η chosen with hindsight (0.5) | 72.0% | — |
+| A · plain Hebbian (η = 0.25) | 70.5% | 47.5% |
+| **B · endocrine-modulated (η = 0.25)** | **72.1%** (better for 18/20 users) | **52.4%** |
+| Plain, best η chosen with hindsight (0.5) | 71.2% | — |
 
-The endocrine system beats plain learning at the same base rate, mostly by re-learning faster after the change. A plain learner whose rate is hand-tuned in hindsight reaches about the same accuracy. The benefit is **self-tuning plasticity**, not extra information. The app shows this comparison directly.
+The endocrine system beats plain learning at the same base rate, mostly by re-learning faster after the change. With the wrong-reply penalty it also edges out a plain learner whose rate was hand-tuned in hindsight. The margin is small, though: the benefit is **self-tuning plasticity**, not extra information. The app shows this comparison directly.
 
 ## 🚀 Run locally
 

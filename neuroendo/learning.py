@@ -126,19 +126,41 @@ def predict(x, W, S=0.0, use_bias=True):
     return scores, probs, int(np.argmax(scores))
 
 
-def hebbian_update(W, x, target_idx, probs, factor=1.0, eta=ETA):
-    """Three-factor Hebbian rule with an anti-Hebbian term.
+PENALTY = 0.5         # extra negative weight for a reply the user rejected
 
-    dW = eta * g(H) * x (y - p)^T
+
+def hebbian_update(W, x, target_idx, probs, factor=1.0, eta=ETA, wrong_idx=None, penalty=PENALTY):
+    """Three-factor Hebbian rule with an anti-Hebbian term and an explicit penalty.
+
+    dW = eta * g(H) * x (y - p)^T                      (always)
+    dW[:, wrong] -= eta * g(H) * penalty * x           (when a reply was rejected)
 
     The Hebbian part x*y^T strengthens the input -> correct-response link; the
     anti-Hebbian part -x*p^T weakens links to responses the network currently
-    favours, so wrong associations decay and weights can become negative.
+    favours. When the user rejects a reply, the links that produced that wrong
+    reply also get a direct negative push, so wrong answers earn negative weights.
     """
     y = np.zeros(len(RESPONSES))
     y[target_idx] = 1.0
     delta = eta * factor * np.outer(x, y - probs)
+    if wrong_idx is not None and wrong_idx != target_idx:
+        delta[:, wrong_idx] -= eta * factor * penalty * x
     return np.clip(W + delta, -W_LIMIT, W_LIMIT), delta
+
+
+def describe_weight_change(delta, top=3, threshold=0.005):
+    """Human-readable list of the biggest weight increases and decreases."""
+    ups, downs = [], []
+    order = np.argsort(delta, axis=None)
+    for flat in order[::-1][:top]:
+        i, j = np.unravel_index(flat, delta.shape)
+        if delta[i, j] > threshold:
+            ups.append((FEATURES[i], RESPONSES[j], float(delta[i, j])))
+    for flat in order[:top]:
+        i, j = np.unravel_index(flat, delta.shape)
+        if delta[i, j] < -threshold:
+            downs.append((FEATURES[i], RESPONSES[j], float(delta[i, j])))
+    return ups, downs
 
 
 # ---------------------------------------------------------------- replies
@@ -168,6 +190,8 @@ def init_state():
         "transcript": "",
         "reply_variant": 0,
         "messages": [],
+        "convo_log": [],
+        "current_log_id": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -177,7 +201,8 @@ def init_state():
 def reset_state():
     for key in ("W", "reward", "stress", "history", "last_x", "last_features", "last_pred",
                 "last_probs", "last_notes", "ab_results", "emotion_scores", "emotion_notes",
-                "transcript", "reply_variant", "messages"):
+                "transcript", "reply_variant", "messages", "convo_log", "current_log_id",
+                "chat_capture", "feedback_done"):
         st.session_state.pop(key, None)
     init_state()
 
@@ -276,11 +301,13 @@ def run_ab_experiment(seeds=20, samples=240):
         for x, target in zip(X, y):
             _, p_a, k_a = predict(x, W_a, use_bias=False)
             hits_a.append(k_a == target)
-            W_a, _ = hebbian_update(W_a, x, target, p_a, factor=1.0)
+            W_a, _ = hebbian_update(W_a, x, target, p_a, factor=1.0,
+                                    wrong_idx=None if k_a == target else k_a)
 
             _, p_b, k_b = predict(x, W_b, S=S)
             hits_b.append(k_b == target)
-            W_b, _ = hebbian_update(W_b, x, target, p_b, factor=endocrine_modulation(D, S))
+            W_b, _ = hebbian_update(W_b, x, target, p_b, factor=endocrine_modulation(D, S),
+                                    wrong_idx=None if k_b == target else k_b)
             D, S = endocrine_step(D, S, x, accepted=(k_b == target))
         hits_a, hits_b = np.array(hits_a, float), np.array(hits_b, float)
         acc_a.append(hits_a.mean()); acc_b.append(hits_b.mean())
@@ -300,7 +327,7 @@ def run_ab_experiment(seeds=20, samples=240):
             for x, target in zip(X, y):
                 _, p, k = predict(x, W, use_bias=False)
                 hits += k == target
-                W, _ = hebbian_update(W, x, target, p, eta=eta)
+                W, _ = hebbian_update(W, x, target, p, eta=eta, wrong_idx=None if k == target else k)
             accs.append(hits / samples)
         tuned[eta] = float(np.mean(accs))
     tuned[ETA] = float(np.mean(acc_a))

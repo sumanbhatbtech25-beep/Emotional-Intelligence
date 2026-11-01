@@ -3,9 +3,10 @@ import pandas as pd
 import streamlit as st
 from neuroendo.learning import (
     EMOTIONS, FEATURES, RESPONSES, init_state, reset_state, render_network_svg, run_ab_experiment,
-    build_features, predict, hebbian_update, endocrine_modulation, endocrine_step, emotional_drive,
+    build_features, predict, hebbian_update, describe_weight_change, endocrine_modulation, endocrine_step, emotional_drive,
     make_response,
 )
+from neuroendo.replies import make_title
 from neuroendo.emotion import (
     transcribe_audio, infer_text_emotion, infer_facial_emotion, combine_emotion_scores,
     visual_features, audio_features, average_emotion_scores, estimate_uncertainty, apply_event_hint,
@@ -349,9 +350,10 @@ def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, 
         "emotion": top,
         "via": "typed" if typed else "camera + mic",
     })
+    log_id = log_conversation("Chat · typed" if typed else "Chat · camera + mic", user_text, combined, strategy, reply)
     st.session_state.messages.append({
         "role": "assistant", "text": reply, "strategy": strategy, "x": x, "probs": probs,
-        "user_text": user_text, "rated": False,
+        "user_text": user_text, "rated": False, "log_id": log_id,
     })
     # Kept for the Model Insights page.
     st.session_state.emotion_scores = combined
@@ -374,6 +376,7 @@ def respond(user_text, text_scores, face_scores, arousal, face_detected, notes, 
         "event": event_key,
         "strategy": strategy,
         "reply": reply,
+        "log_id": log_id,
     }
     st.session_state.feedback_done = False
 
@@ -414,18 +417,46 @@ def render_chat_capture(cap, key):
     st.markdown(f"**NEUROENDO replied:** {cap['reply']}")
 
 
-def learn_from(message, target, accepted):
-    """Feedback on a reply updates the Hebbian weights and the endocrine state."""
-    x, probs = message["x"], message["probs"]
+def log_conversation(source, user_text, emotion_scores, strategy, reply):
+    """Add an exchange to the conversation log (shown on the Last 5 Conversations page)."""
+    top = max(emotion_scores, key=emotion_scores.get)
+    entry = {
+        "id": len(st.session_state.convo_log) + 1,
+        "title": make_title(user_text),
+        "source": source,
+        "user_text": user_text,
+        "emotion": top,
+        "emotion_score": float(emotion_scores[top]),
+        "strategy": strategy,
+        "reply": reply,
+        "status": "waiting",
+    }
+    st.session_state.convo_log.append(entry)
+    st.session_state.current_log_id = entry["id"]
+    return entry["id"]
+
+
+def get_log(log_id):
+    for entry in st.session_state.convo_log:
+        if entry["id"] == log_id:
+            return entry
+    return None
+
+
+def apply_feedback(x, probs, strategy, target, accepted, log_id=None, new_reply=None):
+    """Learn from feedback: Hebbian update (+ explicit penalty for a rejected reply) and endocrine update."""
     modulation = endocrine_modulation(st.session_state.reward, st.session_state.stress)
-    st.session_state.W, delta = hebbian_update(st.session_state.W, x, RESPONSES.index(target), probs, factor=modulation)
+    wrong_idx = None if accepted else RESPONSES.index(strategy)
+    st.session_state.W, delta = hebbian_update(
+        st.session_state.W, x, RESPONSES.index(target), probs, factor=modulation, wrong_idx=wrong_idx)
     st.session_state.reward, st.session_state.stress = endocrine_step(
         st.session_state.reward, st.session_state.stress, x, accepted)
-    message["rated"] = True
+    ups, downs = describe_weight_change(delta)
+    W = st.session_state.W
     st.session_state.history.append({
         "Interaction": len(st.session_state.history) + 1,
         "Emotion": EMOTIONS[int(np.argmax(x[:len(EMOTIONS)]))],
-        "Reply": message["strategy"],
+        "Reply": strategy,
         "Target": target,
         "Accepted": accepted,
         "Reward D": st.session_state.reward,
@@ -433,7 +464,23 @@ def learn_from(message, target, accepted):
         "Plasticity g": modulation,
         "Weight change norm": float(np.linalg.norm(delta)),
     })
+    entry = get_log(log_id)
+    if entry is not None:
+        entry.update({
+            "status": "accepted" if accepted else "corrected",
+            "target": target,
+            "new_reply": new_reply,
+            "ups": [(f, r, d, float(W[FEATURES.index(f), RESPONSES.index(r)])) for f, r, d in ups],
+            "downs": [(f, r, d, float(W[FEATURES.index(f), RESPONSES.index(r)])) for f, r, d in downs],
+            "D": st.session_state.reward, "S": st.session_state.stress, "g": modulation,
+        })
 
+
+def learn_from(message, target, accepted, new_reply=None):
+    """Feedback on a Chat reply."""
+    apply_feedback(message["x"], message["probs"], message["strategy"], target, accepted,
+                   log_id=message.get("log_id"), new_reply=new_reply)
+    message["rated"] = True
 
 
 # ---- Top-right view switch: Chat (default) or the full Emotional Learning site ----
@@ -555,17 +602,19 @@ if st.session_state.view == "Chat":
                     st.toast("Thanks! I'll remember that 💗")
                     st.rerun()
             with fb2:
-                with st.popover("🙈 Reply differently", use_container_width=True):
-                    st.caption("How should I have responded? I'll learn from this.")
+                with st.popover("👎 Wrong reply", use_container_width=True):
+                    st.caption("How should I have responded? The wrong reply gets negative weight and I'll learn this tone instead.")
                     options = [r for r in RESPONSES if r != last["strategy"]]
                     choice = st.radio("Tone", options, format_func=lambda r: STYLE_LABELS[r],
                                       key=f"tone_{len(st.session_state.messages)}", label_visibility="collapsed")
                     if st.button("Use this tone", key=f"teach_{len(st.session_state.messages)}", type="primary"):
-                        learn_from(last, choice, accepted=False)
                         st.session_state.reply_variant += 1
+                        retoned = make_response(choice, None, 0.0, st.session_state.reply_variant, text=last["user_text"])
+                        learn_from(last, choice, accepted=False, new_reply=retoned)
+                        st.toast(f"Got it — less {last['strategy']}, more {choice} for moments like this.")
                         st.session_state.messages.append({
                             "role": "assistant",
-                            "text": make_response(choice, None, 0.0, st.session_state.reply_variant, text=last["user_text"]),
+                            "text": retoned,
                             "strategy": choice, "x": last["x"], "probs": last["probs"],
                             "user_text": last["user_text"], "rated": True,
                         })
@@ -582,7 +631,7 @@ if st.session_state.view == "Chat":
 
 
 # ======================= Emotional Learning: the full original site =======================
-if st.session_state.get("active_page") not in ("Emotion Studio", "Model Insights", "A/B Experiment"):
+if st.session_state.get("active_page") not in ("Emotion Studio", "Model Insights", "Last 5 Conversations", "A/B Experiment"):
     st.session_state.active_page = "Emotion Studio"
 
 st.markdown("""
@@ -622,6 +671,7 @@ with st.sidebar:
     pages = [
         ("Emotion Studio", "♡", "Capture & learn"),
         ("Model Insights", "⌘", "Weights & history"),
+        ("Last 5 Conversations", "☰", "Each reply and what it learned"),
         ("A/B Experiment", "⇄", "Compare learning"),
     ]
     for page_name, page_icon, page_label in pages:
@@ -666,6 +716,7 @@ if st.session_state.active_page == "Emotion Studio":
                                           "uncertainty": cap["uncertainty"]}
         st.session_state.emotion_scores = cap["fused"]
         st.session_state.transcript = cap["transcript"]
+        st.session_state.current_log_id = cap.get("log_id")
         st.caption("The learning section below uses this same analysis. Accept or correct the reply to teach the network.")
 
     if mode == "Type a message":
@@ -686,6 +737,7 @@ if st.session_state.active_page == "Emotion Studio":
             st.session_state.last_features = {"emotion_scores": combined, "arousal": typed_arousal, "uncertainty": uncertainty}
             st.session_state.last_notes = [f"Typed message with intensity {typed_arousal:.2f}."]
             st.session_state.emotion_source = "typed in Emotion Studio"
+            st.session_state.current_log_id = None
             st.session_state.feedback_done = False
             st.session_state.reply_variant += 1
             st.rerun()
@@ -769,6 +821,7 @@ if st.session_state.active_page == "Emotion Studio":
                     st.session_state.emotion_scores = combined
                     st.session_state.emotion_notes = speech_notes + text_notes + list(dict.fromkeys(face_notes)) + anot
                     st.session_state.emotion_source = "recorded webcam frames + microphone audio"
+                    st.session_state.current_log_id = None
                     st.session_state.last_features = {"emotion_scores": combined, "arousal": audio_cue, "uncertainty": uncertainty}
                     st.session_state.last_notes = vnotes + anot
                     st.session_state.feedback_done = False
@@ -875,14 +928,22 @@ if st.session_state.active_page == "Emotion Studio":
                                   st.session_state.reply_variant, text=st.session_state.transcript)
             st.markdown(f'<div class="neo-insight-card" style="font-size:1.02rem;line-height:1.5;">{reply}</div>',
                         unsafe_allow_html=True)
+            if st.session_state.current_log_id is None:
+                studio_source = ("Studio · camera + mic" if st.session_state.get("emotion_source", "").startswith("recorded")
+                                 else "Studio · typed")
+                log_conversation(studio_source, st.session_state.transcript, current["emotion_scores"], pred, reply)
             r_emo, s_emo = emotional_drive(x)
             st.caption(f"Your detected state pushes reward by {r_emo:.2f} and stress by {s_emo:.2f}.")
 
         st.markdown("#### Was that the right kind of reply?")
-        if st.session_state.get("feedback_done"):
-            st.success("Thanks — feedback learned. Send a new message or recording to continue.")
+        current_entry = get_log(st.session_state.current_log_id)
+        if current_entry is not None and current_entry["status"] != "waiting":
+            verdict = ("👍 accepted" if current_entry["status"] == "accepted"
+                       else f"✗ rejected — taught {current_entry['target']} instead")
+            st.success(f"Already learned from this one ({verdict}). See **Last 5 Conversations** for what changed.")
         else:
-            st.write("Accept it, or pick the reply style you'd have preferred. The network and the endocrine system both learn from this.")
+            st.write("Accept it, or pick the reply style you'd have preferred. A rejected reply gets negative weights, "
+                     "and the endocrine system reacts too.")
             fb_left, fb_right = st.columns([1, 2])
             with fb_left:
                 accept = st.button("👍 Good reply", type="primary", use_container_width=True)
@@ -892,26 +953,10 @@ if st.session_state.active_page == "Emotion Studio":
                 correct = st.button("Teach this instead", use_container_width=True)
             if accept or correct:
                 target = pred if accept else chosen_alt
-                accepted = bool(accept)
-                modulation = endocrine_modulation(st.session_state.reward, st.session_state.stress)
-                st.session_state.W, delta = hebbian_update(
-                    st.session_state.W, x, RESPONSES.index(target), probs, factor=modulation
-                )
-                st.session_state.reward, st.session_state.stress = endocrine_step(
-                    st.session_state.reward, st.session_state.stress, x, accepted
-                )
-                st.session_state.history.append({
-                    "Interaction": len(st.session_state.history) + 1,
-                    "Emotion": top_emotion,
-                    "Reply": pred,
-                    "Target": target,
-                    "Accepted": accepted,
-                    "Reward D": st.session_state.reward,
-                    "Stress S": st.session_state.stress,
-                    "Plasticity g": modulation,
-                    "Weight change norm": float(np.linalg.norm(delta)),
-                })
-                st.session_state.feedback_done = True
+                apply_feedback(x, probs, pred, target, bool(accept), log_id=st.session_state.current_log_id)
+                for m in st.session_state.messages:   # keep the Chat in sync
+                    if m.get("log_id") == st.session_state.current_log_id:
+                        m["rated"] = True
                 st.rerun()
 
 
@@ -962,7 +1007,11 @@ if st.session_state.active_page == "Model Insights":
     st.markdown(render_network_svg(st.session_state.W), unsafe_allow_html=True)
     st.caption("The diagram is animated for visual clarity. Connection thickness reflects the current learned weight magnitude.")
     st.markdown("**Weight matrix W** — rows are input features (emotion scores, arousal, uncertainty), columns are reply strategies. It starts from a weak default pairing (sadness→Supportive, anger→De-escalating, fear→Calming, joy→Upbeat, surprise→Curious) and adapts to your feedback.")
-    st.dataframe(w_df.style.format("{:.3f}"), use_container_width=True)
+    _neg = lambda v: "color:#B23A48;font-weight:700;" if v < 0 else ("color:#2E7D5B;" if v > 0 else "color:#B9A7B0;")
+    _sty = w_df.style.format("{:+.3f}")
+    _sty = _sty.map(_neg) if hasattr(_sty, "map") else _sty.applymap(_neg)
+    st.dataframe(_sty, use_container_width=True)
+    st.caption("Green = positive association, red = negative (from rejected replies and the anti-Hebbian term).")
 
     if st.session_state.history:
         hist = pd.DataFrame(st.session_state.history)
@@ -996,6 +1045,48 @@ if st.session_state.active_page == "Model Insights":
 
 **Limitations.** Emotion scores come from pretrained models (or a keyword fallback for text) and are uncertain cues, not ground truth. Replies are template-based per strategy, not generated by a language model. D and S are engineering variables inspired by neuromodulation, not a biological model.
 """)
+
+
+if st.session_state.active_page == "Last 5 Conversations":
+    st.markdown('<div class="neo-section"><span class="neo-number">01</span><span class="neo-heading">Last 5 conversations</span><span class="neo-kicker">Reply &amp; learning</span></div>', unsafe_allow_html=True)
+    st.write("What each conversation was about, how NEUROENDO replied, your feedback, and what it learned. "
+             "A rejected reply gets negative weight on the links that chose it.")
+    log = st.session_state.convo_log[-5:][::-1]
+    if not log:
+        st.info("No conversations yet. Talk or type on the Chat page, then come back here.")
+
+    def _links(items, colour, arrow):
+        return " · ".join(
+            f'<span style="color:{colour};white-space:nowrap;">{arrow} {f}→{r} {d:+.2f} '
+            f'<span style="color:#806A76;">(now {w:+.2f})</span></span>' for f, r, d, w in items[:2])
+
+    for entry in log:
+        status = entry["status"]
+        badge = {"accepted": ("👍 Accepted", "#2E7D5B", "#E3F4EC"),
+                 "corrected": (f"👎 Wrong → taught {entry.get('target', '')}", "#B23A48", "#FBE4E8"),
+                 "waiting": ("⏳ No feedback — nothing learned", "#806A76", "#F4EEF1")}[status]
+        emoji = EMOTION_ART.get(entry["emotion"], "💗")
+        html = (
+            '<div class="neo-insight-card" style="margin-bottom:.75rem;padding:.85rem 1rem;">'
+            '<div style="display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;">'
+            f'<div style="font-size:1.05rem;font-weight:850;color:#432A38;">#{entry["id"]} · {entry.get("title", "")}</div>'
+            f'<span style="font-size:.78rem;font-weight:750;padding:.2rem .6rem;border-radius:99px;'
+            f'color:{badge[1]};background:{badge[2]};">{badge[0]}</span></div>'
+            f'<div style="font-size:.88rem;color:#5A3A4B;margin-top:.3rem;">{emoji} Sensed <b>{entry["emotion"]}</b> '
+            f'({entry["emotion_score"]:.0%}) → replied <b>{entry["strategy"]}</b>'
+            f'<span style="color:#806A76;"> · {entry["source"]}</span></div>'
+        )
+        if status != "waiting":
+            ups = _links(entry["ups"], "#2E7D5B", "▲")
+            downs = _links(entry["downs"], "#B23A48", "▼")
+            html += (f'<div style="font-size:.82rem;margin-top:.4rem;padding-top:.4rem;border-top:1px dashed #F0C6D6;">'
+                     f'<b style="color:#A92F65;">Learned:</b> {ups}{" · " if ups and downs else ""}{downs}'
+                     f'<span style="color:#806A76;"> · D {entry["D"]:.2f} · S {entry["S"]:.2f} · g {entry["g"]:.2f}×</span></div>')
+        html += '</div>'
+        st.markdown(html, unsafe_allow_html=True)
+    if len(st.session_state.convo_log) > 5:
+        st.caption(f"Showing the latest 5 of {len(st.session_state.convo_log)} conversations this session. "
+                   "The full numeric history is in Model Insights.")
 
 
 if st.session_state.active_page == "A/B Experiment":
